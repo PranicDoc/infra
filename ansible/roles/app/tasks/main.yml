@@ -1,0 +1,41 @@
+---
+- name: App directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ app_dir }}"
+    - "{{ app_dir }}/bin"
+
+- name: .env must already exist (not managed here)
+  ansible.builtin.stat:
+    path: "{{ app_dir }}/.env"
+  register: env_file
+
+- name: Fail if .env is missing
+  ansible.builtin.assert:
+    that: env_file.stat.exists
+    fail_msg: "{{ app_dir }}/.env is missing — copy it to the VM by hand; it holds secrets and isn't in git."
+
+- name: Deploy script used by CI (deploy-uat.yml)
+  ansible.builtin.template:
+    src: deploy.sh.j2
+    dest: "{{ app_dir }}/bin/deploy.sh"
+    mode: "0750"
+
+- name: Compose file
+  when: compose_managed | bool
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/docker-compose.yml"
+    dest: "{{ app_dir }}/docker-compose.yml"
+    mode: "0644"
+    backup: true
+
+- name: Weekly prune of unused images
+  ansible.builtin.cron:
+    name: docker image prune
+    weekday: "{{ image_prune_weekday }}"
+    hour: "{{ image_prune_hour }}"
+    minute: "0"
+    job: /usr/bin/docker image prune -af --filter "until=168h" > /dev/null 2>&1

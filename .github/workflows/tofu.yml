@@ -1,0 +1,102 @@
+name: OpenTofu — GCP prod
+
+# PR touching tofu/  -> plan, summary posted to the job page.
+# Merge to main      -> plan again + apply, behind the `infra-prod` Environment
+#                       (Settings -> Environments -> infra-prod -> Required reviewers).
+#
+# Repo config (Settings -> Secrets and variables -> Actions):
+#   vars.GCP_WORKLOAD_IDENTITY_PROVIDER  output `workload_identity_provider`
+#   vars.TOFU_SERVICE_ACCOUNT            output `tofu_service_account`
+#   secrets.TOFU_PRIVATE_TFVARS          content of tofu/private.auto.tfvars
+
+on:
+  pull_request:
+    paths: ["tofu/**", ".github/workflows/tofu.yml"]
+  push:
+    branches: [main]
+    paths: ["tofu/**", ".github/workflows/tofu.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: tofu-prod
+  cancel-in-progress: false # never interrupt an apply
+
+permissions:
+  contents: read
+  id-token: write
+
+defaults:
+  run:
+    working-directory: tofu
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.TOFU_SERVICE_ACCOUNT }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.13.1
+
+      - name: Write private tfvars
+        env:
+          PRIVATE_TFVARS: ${{ secrets.TOFU_PRIVATE_TFVARS }}
+        run: printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
+
+      - run: tofu fmt -recursive -check
+      - run: tofu init -input=false
+      - run: tofu validate
+
+      - name: Plan
+        run: |
+          tofu plan -input=false -var-file=prod.tfvars -out=tfplan -no-color | tee plan.txt
+          {
+            echo '## OpenTofu plan'
+            echo '```'
+            grep -E '^(Plan:|No changes|  # )' plan.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: tfplan
+          path: tofu/tfplan
+          retention-days: 1
+
+  apply:
+    needs: plan
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: infra-prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.TOFU_SERVICE_ACCOUNT }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.13.1
+
+      - name: Write private tfvars
+        env:
+          PRIVATE_TFVARS: ${{ secrets.TOFU_PRIVATE_TFVARS }}
+        run: printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: tofu
+
+      - run: tofu init -input=false
+      # Applies exactly the plan the reviewer saw; fails if state moved meanwhile.
+      - run: tofu apply -input=false tfplan

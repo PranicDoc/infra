@@ -1,0 +1,48 @@
+name: Deploy to UAT VM (reusable)
+
+# Runs /opt/pranicdoc/bin/deploy.sh on the VM — a script installed and kept
+# current by ansible/ (role `app`). The deploy logic lives in this repo, so app
+# repos don't need to check it out.
+#
+# Caller example:
+#
+#   deploy-uat:
+#     needs: build
+#     uses: PranicDoc/infra/.github/workflows/deploy-uat.yml@main
+#     with:
+#       services: cph
+#     secrets: inherit   # UAT_HOST, UAT_SSH_USER, UAT_SSH_KEY (org-level secrets)
+
+on:
+  workflow_call:
+    inputs:
+      services:
+        description: Space-separated compose service names, e.g. "cph ui"
+        type: string
+        required: true
+      environment:
+        type: string
+        default: uat
+    secrets:
+      UAT_HOST:
+        required: true
+      UAT_SSH_USER:
+        required: true
+      UAT_SSH_KEY:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        env:
+          SERVICES: ${{ inputs.services }}
+        with:
+          host: ${{ secrets.UAT_HOST }}
+          username: ${{ secrets.UAT_SSH_USER }}
+          key: ${{ secrets.UAT_SSH_KEY }}
+          envs: SERVICES
+          script_stop: true
+          script: /opt/pranicdoc/bin/deploy.sh $SERVICES

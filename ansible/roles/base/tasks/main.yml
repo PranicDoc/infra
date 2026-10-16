@@ -1,0 +1,27 @@
+---
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - ca-certificates
+      - curl
+      - jq
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Security updates install themselves
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    mode: "0644"
+
+- name: Cap journald disk usage
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/journald.conf
+    regexp: '^#?SystemMaxUse='
+    line: SystemMaxUse=500M
+  notify: Restart journald

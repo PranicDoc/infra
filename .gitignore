@@ -1,0 +1,14 @@
+# OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+plan.txt
+crash.log
+private.auto.tfvars
+*_override.tf
+override.tf
+
+# Ansible
+*.retry
+ansible/files/.env

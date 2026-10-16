@@ -1,0 +1,109 @@
+name: Deploy to Cloud Run (reusable)
+
+# Called from cph / pdfWorker / credit-service after their image is pushed to
+# Artifact Registry. Only swaps the image — env, secrets, scaling and IAM are
+# owned by tofu/. If the new revision fails its health check, traffic goes
+# straight back to the previous revision.
+#
+# Caller example (in the app repo):
+#
+#   deploy-prod:
+#     needs: build
+#     permissions: { contents: read, id-token: write }
+#     uses: PranicDoc/infra/.github/workflows/deploy-cloudrun.yml@main
+#     with:
+#       service: cph
+#       image: asia-south1-docker.pkg.dev/<project>/all-in-one/cph:sha-abc1234
+#       health_path: /cph/actuator/health
+#       workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+#       service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+#
+# Requires infra repo Settings -> Actions -> General -> Access:
+# "Accessible from repositories in the 'PranicDoc' organization".
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        type: string
+        required: true
+      image:
+        description: Full image ref, pinned to a sha tag (never :latest)
+        type: string
+        required: true
+      health_path:
+        type: string
+        default: /actuator/health
+      region:
+        type: string
+        default: asia-south1
+      project_id:
+        type: string
+        default: project-62583e23-5e4b-48e7-b00
+      workload_identity_provider:
+        type: string
+        required: true
+      service_account:
+        type: string
+        required: true
+      environment:
+        description: GitHub Environment gating the rollout (add required reviewers there)
+        type: string
+        default: cloudrun-production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SERVICE: ${{ inputs.service }}
+      REGION: ${{ inputs.region }}
+      PROJECT: ${{ inputs.project_id }}
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Remember current revision
+        id: prev
+        run: |
+          PREV=$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" \
+                   --format='value(status.latestReadyRevisionName)')
+          echo "revision=$PREV" >> "$GITHUB_OUTPUT"
+          echo "Previous revision: $PREV"
+
+      - name: Roll out new image
+        run: |
+          gcloud run deploy "$SERVICE" --project="$PROJECT" --region="$REGION" \
+            --image="${{ inputs.image }}" --quiet
+
+      - name: Health check
+        id: health
+        run: |
+          URL=$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='value(status.url)')
+          TOKEN=$(gcloud auth print-identity-token --audiences="$URL")
+          for i in $(seq 1 12); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$URL${{ inputs.health_path }}" || true)
+            echo "attempt $i: HTTP $CODE"
+            [ "$CODE" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::error::$SERVICE unhealthy after rollout"
+          exit 1
+
+      - name: Roll back traffic
+        if: failure() && steps.prev.outputs.revision != ''
+        run: |
+          gcloud run services update-traffic "$SERVICE" --project="$PROJECT" --region="$REGION" \
+            --to-revisions="${{ steps.prev.outputs.revision }}=100"
+          echo "Rolled back to ${{ steps.prev.outputs.revision }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: success()
+        run: echo "Deployed \`${{ inputs.image }}\` to **$SERVICE**" >> "$GITHUB_STEP_SUMMARY"

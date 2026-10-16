@@ -1,0 +1,72 @@
+name: Ansible — UAT VM
+
+# Merge to main touching ansible/ -> provision the UAT VM (packages, Docker
+# settings, deploy script). Manual runs can dry-run with --check first.
+#
+# Secrets: UAT_HOST, UAT_SSH_USER, UAT_SSH_KEY (same as deploy-uat.yml).
+
+on:
+  push:
+    branches: [main]
+    paths: ["ansible/**", ".github/workflows/ansible.yml"]
+  pull_request:
+    paths: ["ansible/**", ".github/workflows/ansible.yml"]
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: Dry run (--check --diff)
+        type: boolean
+        default: true
+
+concurrency:
+  group: ansible-uat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ansible
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install ansible-core==2.17.* ansible-lint==24.*
+      - run: ansible-galaxy collection install -r requirements.yml
+      - run: ansible-playbook playbooks/provision.yml --syntax-check
+      - run: ansible-lint playbooks/provision.yml
+
+  provision:
+    needs: lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install ansible-core==2.17.*
+      - run: ansible-galaxy collection install -r requirements.yml
+
+      - name: SSH key
+        env:
+          KEY: ${{ secrets.UAT_SSH_KEY }}
+          HOST: ${{ secrets.UAT_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/uat && chmod 600 ~/.ssh/uat
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+
+      - name: Run playbook
+        env:
+          UAT_HOST: ${{ secrets.UAT_HOST }}
+          UAT_SSH_USER: ${{ secrets.UAT_SSH_USER }}
+        run: |
+          FLAGS=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.check_only }}" = "true" ]; then
+            FLAGS="--check --diff"
+          fi
+          ansible-playbook playbooks/provision.yml $FLAGS \
+            -e ansible_host="$UAT_HOST" -e ansible_user="$UAT_SSH_USER" \
+            --private-key ~/.ssh/uat

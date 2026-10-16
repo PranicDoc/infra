@@ -1,0 +1,22 @@
+# Copy to private.auto.tfvars (gitignored) and fill in. For CI, paste the same
+# file content into the infra repo secret TOFU_PRIVATE_TFVARS.
+# Not secrets (those live in Secret Manager) — just values we don't publish.
+
+cph_env_private = {
+  SPRING_DATASOURCE_URL      = "jdbc:postgresql://<aiven-host>:<port>/pranic_doc?sslmode=require"
+  SPRING_DATASOURCE_USERNAME = "<aiven app user>"
+  DB_HOST                    = "<aiven-host>"
+  DB_PORT                    = "<port>"
+  DB_USERNAME                = "<aiven app user>"
+  GOOGLE_CLIENT_ID           = "<...>.apps.googleusercontent.com"
+  R2_ENDPOINT                = "https://<account>.r2.cloudflarestorage.com"
+  MAIL_USERNAME              = "<smtp user>"
+  WHATSAPP_PHONE_NUMBER_ID   = ""
+  SPRING_DATA_REDIS_HOST     = "<name>.upstash.io"
+}
+
+# Fill these when enable_pdfworker / enable_creditservice go true.
+# pdfworker_env            = {}
+# pdfworker_secret_env     = { JWT_SECRET = "jwt-secret", DB_PASSWORD = "db-password", R2_ACCESS_KEY = "r2-access-key", R2_SECRET_KEY = "r2-secret-key" }
+# creditservice_env        = {}
+# creditservice_secret_env = { CREDIT_API_KEY = "credit-api-key" }

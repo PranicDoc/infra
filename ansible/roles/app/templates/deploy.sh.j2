@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Usage: deploy.sh <service> [service...]   e.g. deploy.sh cph ui
+# Pulls the services' current tags, restarts only them, and waits for the
+# container healthcheck. Exits non-zero (and prints logs) if any stays unhealthy.
+set -euo pipefail
+
+[ "$#" -gt 0 ] || { echo "usage: $0 <service> [service...]" >&2; exit 2; }
+
+cd {{ app_dir }}
+docker compose pull "$@"
+docker compose up -d --no-deps "$@"
+
+for svc in "$@"; do
+  cid=$(docker compose ps -q "$svc")
+  [ -n "$cid" ] || { echo "$svc: no container after up" >&2; docker compose ps >&2; exit 1; }
+
+  # Services without a healthcheck count as healthy once running.
+  if [ "$(docker inspect -f '{{ '{{' }}if .State.Health{{ '}}' }}yes{{ '{{' }}end{{ '}}' }}' "$cid")" != "yes" ]; then
+    echo "$svc: running (no healthcheck defined)"
+    continue
+  fi
+
+  for i in $(seq 1 30); do
+    s=$(docker inspect -f '{{ '{{' }}.State.Health.Status{{ '}}' }}' "$cid" 2>/dev/null || echo missing)
+    echo "$svc health [$i/30]: $s"
+    [ "$s" = healthy ] && continue 2
+    sleep 10
+  done
+
+  echo "$svc did not become healthy within ~5 min" >&2
+  docker compose logs --tail=80 "$svc" >&2 || true
+  exit 1
+done

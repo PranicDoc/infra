@@ -1,0 +1,8 @@
+---
+- name: Provision UAT VM
+  hosts: uat
+  become: true
+  roles:
+    - base
+    - docker
+    - app
