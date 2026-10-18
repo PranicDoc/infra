@@ -1,0 +1,88 @@
+name: Run an Ansible playbook on the prod VM
+description: >
+  Installs Ansible and runs one of this repo's playbooks (ansible/playbooks/) against the prod VM.
+  Usable from any PranicDoc repo: the runner downloads this whole repo with the action, so the
+  playbooks come along — no checkout or extra token needed. SSH with a key when given, else password.
+
+inputs:
+  playbook:
+    description: Playbook file in ansible/playbooks/ (deploy.yml, provision.yml)
+    required: true
+  extra_vars:
+    description: JSON object of extra vars, e.g. {"services":["cph"]}
+    default: "{}"
+  check:
+    description: "true = dry run (--check --diff)"
+    default: "false"
+  host:
+    description: VM address
+    required: true
+  user:
+    description: SSH user
+    required: true
+  ssh_key:
+    description: Private SSH key (preferred)
+    default: ""
+  password:
+    description: SSH password (used only when no key is given)
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Ansible
+      shell: bash
+      env:
+        PASSWORD: ${{ inputs.password }}
+        KEY: ${{ inputs.ssh_key }}
+      run: |
+        if [ -z "$KEY" ] && [ -z "$PASSWORD" ]; then
+          echo "::error::Give ssh_key (preferred) or password"
+          exit 1
+        fi
+        pip install --quiet 'ansible-core==2.17.*'
+        if [ -z "$KEY" ]; then sudo apt-get install -y -qq sshpass >/dev/null; fi
+
+    - name: Collections
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../../ansible
+      run: ansible-galaxy collection install -r requirements.yml >/dev/null
+
+    - name: SSH credentials
+      shell: bash
+      env:
+        HOST: ${{ inputs.host }}
+        KEY: ${{ inputs.ssh_key }}
+        PASSWORD: ${{ inputs.password }}
+      run: |
+        install -m 700 -d ~/.ssh
+        ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+        creds="$RUNNER_TEMP/ansible-creds.json"
+        if [ -n "$KEY" ]; then
+          printf '%s\n' "$KEY" > ~/.ssh/vm && chmod 600 ~/.ssh/vm
+          jq -n --arg k "$HOME/.ssh/vm" '{ansible_ssh_private_key_file: $k}' > "$creds"
+        else
+          jq -n --arg p "$PASSWORD" '{ansible_password: $p}' > "$creds"
+        fi
+        chmod 600 "$creds"
+
+    - name: ansible-playbook ${{ inputs.playbook }}
+      shell: bash
+      working-directory: ${{ github.action_path }}/../../../ansible
+      env:
+        HOST: ${{ inputs.host }}
+        USER_NAME: ${{ inputs.user }}
+        EXTRA: ${{ inputs.extra_vars }}
+        CHECK: ${{ inputs.check }}
+      run: |
+        flags=()
+        if [ "$CHECK" = "true" ]; then flags+=(--check --diff); fi
+        ansible-playbook "playbooks/${{ inputs.playbook }}" "${flags[@]}" \
+          -e ansible_host="$HOST" -e ansible_user="$USER_NAME" \
+          -e "@$RUNNER_TEMP/ansible-creds.json" \
+          -e "$EXTRA"
+
+    - name: Forget credentials
+      if: always()
+      shell: bash
+      run: rm -f "$RUNNER_TEMP/ansible-creds.json" ~/.ssh/vm

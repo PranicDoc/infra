@@ -1,77 +1,74 @@
 name: Deploy to prod VM (reusable)
 
-# Runs /opt/pranicdoc/bin/deploy.sh on the prod VM — a script installed and
-# kept current by ansible/ (role `app`). The deploy logic lives in this repo,
-# so app repos don't need to check it out. Nothing deploys until an approver
-# comments "approve" on the issue this workflow opens.
+# Approval, then Ansible: ansible/playbooks/deploy.yml pulls the services' current images, restarts
+# only those services and waits for their healthchecks (prints logs and fails if one stays
+# unhealthy). Nothing happens until an approver comments "approve" on the issue approval.yml opens.
 #
-# Caller example:
-#
-#   deploy-prod:
+#   deploy:
 #     needs: build
 #     permissions: { contents: read, issues: write }   # issues: approval gate
 #     uses: PranicDoc/infra/.github/workflows/deploy-vm.yml@main
 #     with:
 #       services: cph
-#     secrets: inherit   # VM_HOST, VM_SSH_USER, VM_SSH_KEY
+#       image_tag: ${{ needs.build.outputs.image_tag }}   # shown on the approval issue
+#     secrets: inherit   # VM_HOST, VM_USER, and VM_SSH_KEY or VM_PASSWORD
 
 on:
   workflow_call:
     inputs:
       services:
-        description: Space-separated compose service names, e.g. "cph ui"
+        description: Space-separated docker compose service names, e.g. "cph ui"
         type: string
         required: true
-      environment:
-        description: GitHub Environment holding the VM secrets
+      image_tag:
+        description: What is being deployed (informational, shown on the approval issue)
         type: string
-        default: prod
+        default: latest
       approvers:
-        description: GitHub users (comma-separated) who must approve before anything is deployed
+        description: GitHub users (comma-separated) allowed to approve
         type: string
         default: user-lee-005
     secrets:
       VM_HOST:
         required: true
-      VM_SSH_USER:
+      VM_USER:
         required: true
       VM_SSH_KEY:
-        required: true
+        required: false
+      VM_PASSWORD:
+        required: false
 
 jobs:
-  # GitHub Free can't require Environment reviewers on private repos, so the gate is an issue in
-  # the calling repo: comment "approve" to deploy, "deny" to cancel.
   approval:
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
     permissions:
       issues: write
-    steps:
-      - uses: trstringer/manual-approval@v1.13.1
-        with:
-          secret: ${{ github.token }}
-          approvers: ${{ inputs.approvers }}
-          minimum-approvals: 1
-          exclude-workflow-initiator-as-approver: false
-          issue-title: "Deploy ${{ inputs.services }} to the prod VM"
-          issue-body: |
-            **${{ inputs.services }}** from `${{ github.repository }}@${{ github.sha }}` is ready to deploy to the **prod VM**.
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            Comment **approve** to deploy or **deny** to cancel.
+    uses: PranicDoc/infra/.github/workflows/approval.yml@main
+    with:
+      title: "Deploy ${{ inputs.services }} (${{ inputs.image_tag }}) to the prod VM"
+      details: |
+        **Services:** `${{ inputs.services }}` · **image:** `${{ inputs.image_tag }}` · **target:** prod VM
+      approvers: ${{ inputs.approvers }}
 
   deploy:
     needs: approval
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
     steps:
-      - uses: appleboy/ssh-action@v1.2.0
+      - name: Services as JSON
+        id: vars
         env:
           SERVICES: ${{ inputs.services }}
+        run: |
+          echo "json=$(jq -cn --arg s "$SERVICES" '{services: ($s | split(" ") | map(select(. != "")))}')" >> "$GITHUB_OUTPUT"
+
+      - uses: PranicDoc/infra/.github/actions/ansible-vm@main
         with:
+          playbook: deploy.yml
+          extra_vars: ${{ steps.vars.outputs.json }}
           host: ${{ secrets.VM_HOST }}
-          username: ${{ secrets.VM_SSH_USER }}
-          key: ${{ secrets.VM_SSH_KEY }}
-          envs: SERVICES
-          script_stop: true
-          script: /opt/pranicdoc/bin/deploy.sh $SERVICES
+          user: ${{ secrets.VM_USER }}
+          ssh_key: ${{ secrets.VM_SSH_KEY }}
+          password: ${{ secrets.VM_PASSWORD }}
+
+      - name: Summary
+        if: success()
+        run: echo "Deployed \`${{ inputs.services }}\` (${{ inputs.image_tag }}) to the prod VM" >> "$GITHUB_STEP_SUMMARY"

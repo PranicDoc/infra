@@ -1,0 +1,77 @@
+---
+# Ship new versions: pull the services' current images, restart only those services, and wait for
+# their container healthchecks. Run by .github/workflows/deploy-vm.yml after approval.
+#
+#   ansible-playbook playbooks/deploy.yml -e '{"services": ["cph", "ui"]}'
+- name: Deploy services on the prod VM
+  hosts: prod
+  gather_facts: false
+  vars:
+    services: []
+    health_retries: 30 # x 10 s = ~5 min per service
+  tasks:
+    - name: Services to deploy were given
+      ansible.builtin.assert:
+        that: services | length > 0
+        fail_msg: 'Pass the compose services, e.g. -e ''{"services": ["cph"]}'''
+
+    - name: Deploy and verify
+      block:
+        - name: Pull images
+          ansible.builtin.command:
+            cmd: docker compose pull {{ services | join(' ') }}
+            chdir: "{{ app_dir }}"
+          changed_when: true
+
+        - name: Restart only these services
+          ansible.builtin.command:
+            cmd: docker compose up -d --no-deps {{ services | join(' ') }}
+            chdir: "{{ app_dir }}"
+          changed_when: true
+
+        - name: Container ids
+          ansible.builtin.command:
+            cmd: docker compose ps -q {{ item }}
+            chdir: "{{ app_dir }}"
+          loop: "{{ services }}"
+          register: containers
+          changed_when: false
+          failed_when: containers.stdout | length == 0
+
+        # "none" = the service defines no healthcheck; running is good enough then.
+        - name: Wait until healthy
+          ansible.builtin.command:
+            cmd: >-
+              docker inspect -f
+              '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{% endraw %}'
+              {{ item.stdout }}
+          loop: "{{ containers.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          register: health
+          until: health.stdout in ['healthy', 'none']
+          retries: "{{ health_retries }}"
+          delay: 10
+          changed_when: false
+
+      rescue:
+        - name: Logs of the services that failed
+          ansible.builtin.command:
+            cmd: docker compose logs --tail=80 {{ services | join(' ') }}
+            chdir: "{{ app_dir }}"
+          register: failure_logs
+          changed_when: false
+          failed_when: false
+
+        - name: Show logs
+          ansible.builtin.debug:
+            var: failure_logs.stdout_lines
+
+        - name: Fail the deploy
+          ansible.builtin.fail:
+            msg: "Deploy of {{ services | join(', ') }} did not become healthy — see the logs above."
+
+    - name: Remove dangling images
+      ansible.builtin.command:
+        cmd: docker image prune -f
+      changed_when: false

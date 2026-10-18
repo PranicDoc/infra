@@ -1,12 +1,9 @@
 ---
-- name: App directories
+- name: App directory
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ app_dir }}"
     state: directory
     mode: "0755"
-  loop:
-    - "{{ app_dir }}"
-    - "{{ app_dir }}/bin"
 
 - name: .env must already exist (not managed here)
   ansible.builtin.stat:
@@ -18,11 +15,8 @@
     that: env_file.stat.exists
     fail_msg: "{{ app_dir }}/.env is missing — copy it to the VM by hand; it holds secrets and isn't in git."
 
-- name: Deploy script used by CI (deploy-vm.yml)
-  ansible.builtin.template:
-    src: deploy.sh.j2
-    dest: "{{ app_dir }}/bin/deploy.sh"
-    mode: "0750"
+# Deploys are done by .github/workflows/deploy-vm.yml over SSH (pull, restart, health check);
+# nothing needs installing on the VM for them.
 
 - name: Compose file
   when: compose_managed | bool

@@ -6,8 +6,8 @@ the VM (`213.199.38.16`, docker-compose). Everything runs from GitHub Actions.
 | Layer | Folder | Runs when | Touches |
 |---|---|---|---|
 | Provisioning | `tofu/` + `tofu.yml` | PR / merge → plan (`uat`); **Run workflow** (`environment`, `apply`) → secret sync + apply | Cloud Run, Secret Manager, Artifact Registry, Cloud Scheduler, WIF, budget |
-| Configuration (prod VM) | `ansible/` + `ansible.yml` | PR / merge → lint; **Run workflow** → provision (dry run by default) | packages, Docker log rotation, `deploy.sh`, image prune cron |
-| Deployment | `deploy-cloudrun.yml`, `deploy-vm.yml` | called by app repos after a build | Cloud Run image swap with auto-rollback · VM `deploy.sh` |
+| Configuration (prod VM) | `ansible/` + `ansible.yml` | PR / merge → lint; **Run workflow** → provision (dry run by default) | packages, Docker log rotation, image prune cron (`provision.yml`) |
+| Deployment | `deploy-cloudrun.yml`, `deploy-vm.yml` | called by app repos after a build; **every deploy waits for an approval comment** (`approval.yml`) | Cloud Run image swap with auto-rollback · VM: Ansible `deploy.yml` (pull, restart, health check) |
 
 ## How environments work
 An environment is three things with the same name, here `uat`:
@@ -45,8 +45,9 @@ keep their current value.
 | `JWT_SECRET`, `ENCRYPTION_KEY`, `INTERNAL_API_KEY` | `jwt-secret`, `encryption-key`, `internal-api-key`. **Each environment gets its own values.** |
 | `GOOGLE_CLIENT_SECRET`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `CREDIT_API_KEY`, `MAIL_PASSWORD`, `REDIS_PASSWORD` | same names, kebab-case |
 
-**Prod (VM) environment:** `VM_HOST`, `VM_SSH_USER`, `VM_SSH_KEY`. These are for `ansible.yml` and
-`deploy-vm.yml`; the key is an SSH **key**.
+**Prod VM access:** `VM_HOST`, `VM_USER`, and `VM_SSH_KEY` (preferred) or `VM_PASSWORD`. App repos pass
+their repo secrets to `deploy-vm.yml`; this repo's `prod` environment holds them for `ansible.yml`. Everything
+that touches the VM is Ansible (`.github/actions/ansible-vm`), so the tooling is the same everywhere.
 
 ## First run of an environment
 1. **Cloud Shell** (console.cloud.google.com → **>_**): run

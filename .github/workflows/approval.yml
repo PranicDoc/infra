@@ -1,0 +1,58 @@
+name: Approval gate (reusable)
+
+# Every deployment waits here for a human. GitHub Free can't require Environment reviewers on
+# private repos, so this opens an issue in the calling repo and waits until an approver comments
+# "approve" (deploy goes ahead) or "deny" (the run fails, nothing is deployed). Gives up after
+# `timeout_minutes`.
+#
+# Used by deploy-vm.yml and deploy-cloudrun.yml, and directly by deploy jobs with their own logic:
+#
+#   approval:
+#     permissions: { issues: write }
+#     uses: PranicDoc/infra/.github/workflows/approval.yml@main
+#     with:
+#       title: "Deploy cph:sha-abc1234 to the prod VM"
+#   deploy:
+#     needs: approval
+#     ...
+
+on:
+  workflow_call:
+    inputs:
+      title:
+        description: Issue title — say what will be deployed where
+        type: string
+        required: true
+      details:
+        description: Extra markdown for the issue body
+        type: string
+        default: ""
+      approvers:
+        description: GitHub users (comma-separated) allowed to approve
+        type: string
+        default: user-lee-005
+      timeout_minutes:
+        type: number
+        default: 240
+
+jobs:
+  approval:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout_minutes }}
+    permissions:
+      issues: write
+    steps:
+      - uses: trstringer/manual-approval@v1.13.1
+        with:
+          secret: ${{ github.token }}
+          approvers: ${{ inputs.approvers }}
+          minimum-approvals: 1
+          exclude-workflow-initiator-as-approver: false
+          issue-title: ${{ inputs.title }}
+          issue-body: |
+            ${{ inputs.details }}
+
+            Requested by @${{ github.actor }} from `${{ github.repository }}@${{ github.sha }}`.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Comment **approve** to deploy or **deny** to cancel.

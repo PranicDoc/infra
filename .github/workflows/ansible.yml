@@ -6,14 +6,14 @@ name: Ansible — prod VM
 # Manual-only on purpose: GitHub Free can't require a reviewer on private-repo Environments,
 # so "Run workflow" is the human approval step for touching prod.
 #
-# Secrets: VM_HOST, VM_SSH_USER, VM_SSH_KEY (same as deploy-vm.yml).
+# Secrets (environment `prod`): VM_HOST, VM_USER, and VM_SSH_KEY or VM_PASSWORD.
 
 on:
   push:
     branches: [main]
     paths: ["ansible/**", ".github/workflows/ansible.yml"]
   pull_request:
-    paths: ["ansible/**", ".github/workflows/ansible.yml"]
+    paths: ["ansible/**", ".github/actions/ansible-vm/**", ".github/workflows/ansible.yml"]
   workflow_dispatch:
     inputs:
       check_only:
@@ -39,37 +39,33 @@ jobs:
       - uses: actions/checkout@v4
       - run: pip install ansible-core==2.17.* ansible-lint==24.*
       - run: ansible-galaxy collection install -r requirements.yml
-      - run: ansible-playbook playbooks/provision.yml --syntax-check
-      - run: ansible-lint playbooks/provision.yml
+      - run: ansible-playbook playbooks/provision.yml playbooks/deploy.yml --syntax-check
+      - run: ansible-lint playbooks/provision.yml playbooks/deploy.yml
 
-  provision:
+  approval:
     needs: lint
     if: github.event_name == 'workflow_dispatch'
+    permissions:
+      issues: write
+    uses: ./.github/workflows/approval.yml
+    with:
+      title: "Provision the prod VM (${{ inputs.check_only && 'dry run' || 'APPLY' }})"
+      details: |
+        Runs `ansible/playbooks/provision.yml` on the prod VM — packages, Docker log rotation, image prune cron.
+        Mode: **${{ inputs.check_only && 'dry run (--check --diff), changes nothing' || 'apply' }}**
+
+  provision:
+    needs: approval
     runs-on: ubuntu-latest
     environment: prod
     steps:
       - uses: actions/checkout@v4
-      - run: pip install ansible-core==2.17.*
-      - run: ansible-galaxy collection install -r requirements.yml
 
-      - name: SSH key
-        env:
-          KEY: ${{ secrets.VM_SSH_KEY }}
-          HOST: ${{ secrets.VM_HOST }}
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/vm && chmod 600 ~/.ssh/vm
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
-
-      - name: Run playbook
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          VM_SSH_USER: ${{ secrets.VM_SSH_USER }}
-        run: |
-          FLAGS=""
-          if [ "${{ inputs.check_only }}" = "true" ]; then
-            FLAGS="--check --diff"
-          fi
-          ansible-playbook playbooks/provision.yml $FLAGS \
-            -e ansible_host="$VM_HOST" -e ansible_user="$VM_SSH_USER" \
-            --private-key ~/.ssh/vm
+      - uses: ./.github/actions/ansible-vm
+        with:
+          playbook: provision.yml
+          check: ${{ inputs.check_only }}
+          host: ${{ secrets.VM_HOST }}
+          user: ${{ secrets.VM_USER }}
+          ssh_key: ${{ secrets.VM_SSH_KEY }}
+          password: ${{ secrets.VM_PASSWORD }}

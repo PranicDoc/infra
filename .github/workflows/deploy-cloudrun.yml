@@ -46,28 +46,15 @@ on:
         default: user-lee-005
 
 jobs:
-  # Every deploy waits for a human. GitHub Free can't require Environment reviewers on private repos,
-  # so this opens an issue in the calling repo and waits for an approver to comment "approve"
-  # ("deny" cancels). The caller must grant `issues: write`.
   approval:
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
     permissions:
       issues: write
-    steps:
-      - uses: trstringer/manual-approval@v1.13.1
-        with:
-          secret: ${{ github.token }}
-          approvers: ${{ inputs.approvers }}
-          minimum-approvals: 1
-          exclude-workflow-initiator-as-approver: false
-          issue-title: "Deploy ${{ inputs.service }}:${{ inputs.image_tag }} to Cloud Run (${{ inputs.environment }})"
-          issue-body: |
-            **${{ inputs.service }}** `${{ inputs.image_tag }}` is ready to deploy to Cloud Run, environment **${{ inputs.environment }}**.
-            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            Comment **approve** to deploy or **deny** to cancel.
-
+    uses: PranicDoc/infra/.github/workflows/approval.yml@main
+    with:
+      title: "Deploy ${{ inputs.service }}:${{ inputs.image_tag }} to Cloud Run (${{ inputs.environment }})"
+      details: |
+        **Service:** `${{ inputs.service }}` · **image tag:** `${{ inputs.image_tag }}` · **Cloud Run environment:** `${{ inputs.environment }}`
+      approvers: ${{ inputs.approvers }}
   deploy:
     needs: approval
     runs-on: ubuntu-latest
