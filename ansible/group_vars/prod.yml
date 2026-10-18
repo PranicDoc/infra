@@ -6,7 +6,7 @@ app_dir: /opt/pranicdoc
 docker_allow_restart: false
 
 # The VM's docker-compose.yml and .env are NOT managed yet — the files on the
-# VM stay the source of truth. Set to true once ansible/files/docker-compose.yml
+# VM stay the source of truth. Set to true once ansible/roles/app/files/docker-compose.yml
 # is a reviewed copy of the VM's file.
 compose_managed: false
 

@@ -13,4 +13,4 @@ ci.auto.tfvars.json
 
 # Ansible
 *.retry
-ansible/files/.env
+ansible/roles/app/files/.env
