@@ -1,22 +1,37 @@
 name: OpenTofu — GCP UAT
 
-# PR touching tofu/  -> plan, summary posted to the job page.
-# Merge to main      -> plan again + apply, behind the `infra-uat` Environment
-#                       (Settings -> Environments -> infra-uat -> Required reviewers).
+# Everything for UAT runs here; nothing is run locally (except the one-time Cloud Shell
+# bootstrap, scripts/bootstrap-gcp.sh, which creates the trust this workflow logs in with).
 #
-# Repo config (Settings -> Secrets and variables -> Actions):
-#   vars.GCP_WORKLOAD_IDENTITY_PROVIDER  output `workload_identity_provider`
-#   vars.TOFU_SERVICE_ACCOUNT            output `tofu_service_account`
-#   secrets.TOFU_PRIVATE_TFVARS          content of tofu/private.auto.tfvars
-#   secrets.TOFU_NEON_TFVARS             content of tofu/neon.auto.tfvars (scripts/configure-neon-uat.ps1)
+#   PR touching tofu/        -> plan (summary on the job page)
+#   merge to main / manual   -> plan, then — after approval in the `infra-uat` Environment —
+#                               sync GitHub secrets into Secret Manager and apply that exact plan
+#   manual, secrets_only     -> just sync secrets (rotate a password without touching infra)
+#
+# Settings -> Secrets and variables -> Actions
+#   Repository variables (non-secret, needed by plan on PRs too):
+#     GCP_WORKLOAD_IDENTITY_PROVIDER, TOFU_SERVICE_ACCOUNT        (printed by bootstrap-gcp.sh)
+#     NEON_HOST, NEON_DATABASE, NEON_USERNAME                      (Neon console -> Connect)
+#     NEON_CREDIT_DATABASE (default credit_service), NEON_CREDIT_USERNAME, NEON_PORT, NEON_USE_POOLER
+#     GOOGLE_CLIENT_ID, R2_ENDPOINT, MAIL_USERNAME, WHATSAPP_PHONE_NUMBER_ID, REDIS_HOST
+#   Environment `infra-uat` secrets (only the apply / secrets-only jobs can read them):
+#     NEON_PASSWORD, NEON_CREDIT_PASSWORD (optional), UAT_JWT_SECRET, UAT_ENCRYPTION_KEY,
+#     UAT_INTERNAL_API_KEY, GOOGLE_CLIENT_SECRET, R2_ACCESS_KEY, R2_SECRET_KEY, CREDIT_API_KEY,
+#     MAIL_PASSWORD, REDIS_PASSWORD
+#   Any secret left unset keeps its current value in Secret Manager.
 
 on:
   pull_request:
-    paths: ["tofu/**", ".github/workflows/tofu.yml"]
+    paths: ["tofu/**", "scripts/ci/**", ".github/workflows/tofu.yml"]
   push:
     branches: [main]
-    paths: ["tofu/**", ".github/workflows/tofu.yml"]
+    paths: ["tofu/**", "scripts/ci/**", ".github/workflows/tofu.yml"]
   workflow_dispatch:
+    inputs:
+      secrets_only:
+        description: Only sync GitHub secrets into Secret Manager (no plan / apply)
+        type: boolean
+        default: false
 
 concurrency:
   group: tofu-uat
@@ -26,12 +41,13 @@ permissions:
   contents: read
   id-token: write
 
-defaults:
-  run:
-    working-directory: tofu
+env:
+  GCP_PROJECT: project-62583e23-5e4b-48e7-b00
+  TOFU_VERSION: 1.13.1
 
 jobs:
   plan:
+    if: ${{ !inputs.secrets_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,21 +59,33 @@ jobs:
 
       - uses: opentofu/setup-opentofu@v1
         with:
-          tofu_version: 1.13.1
+          tofu_version: ${{ env.TOFU_VERSION }}
 
-      - name: Write private tfvars
+      - name: Settings -> tofu/ci.auto.tfvars.json
         env:
-          PRIVATE_TFVARS: ${{ secrets.TOFU_PRIVATE_TFVARS }}
-          NEON_TFVARS: ${{ secrets.TOFU_NEON_TFVARS }}
-        run: |
-          printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
-          printf '%s' "$NEON_TFVARS" > neon.auto.tfvars
+          NEON_HOST: ${{ vars.NEON_HOST }}
+          NEON_PORT: ${{ vars.NEON_PORT }}
+          NEON_DATABASE: ${{ vars.NEON_DATABASE }}
+          NEON_USERNAME: ${{ vars.NEON_USERNAME }}
+          NEON_CREDIT_DATABASE: ${{ vars.NEON_CREDIT_DATABASE }}
+          NEON_CREDIT_USERNAME: ${{ vars.NEON_CREDIT_USERNAME }}
+          NEON_USE_POOLER: ${{ vars.NEON_USE_POOLER }}
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          MAIL_USERNAME: ${{ vars.MAIL_USERNAME }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ vars.WHATSAPP_PHONE_NUMBER_ID }}
+          REDIS_HOST: ${{ vars.REDIS_HOST }}
+        run: bash scripts/ci/write-tfvars.sh tofu/ci.auto.tfvars.json
 
-      - run: tofu fmt -recursive -check
-      - run: tofu init -input=false
-      - run: tofu validate
+      - name: Init / validate
+        working-directory: tofu
+        run: |
+          tofu fmt -recursive -check
+          tofu init -input=false
+          tofu validate
 
       - name: Plan
+        working-directory: tofu
         run: |
           tofu plan -input=false -var-file=uat.tfvars -out=tfplan -no-color | tee plan.txt
           {
@@ -76,7 +104,7 @@ jobs:
 
   apply:
     needs: plan
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: ${{ !inputs.secrets_only && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: infra-uat
     steps:
@@ -87,23 +115,65 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.TOFU_SERVICE_ACCOUNT }}
 
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # Before apply: a new Cloud Run revision needs every referenced secret to have a value.
+      - name: Sync secrets -> Secret Manager
+        env:
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_CREDIT_PASSWORD: ${{ secrets.NEON_CREDIT_PASSWORD }}
+          UAT_JWT_SECRET: ${{ secrets.UAT_JWT_SECRET }}
+          UAT_ENCRYPTION_KEY: ${{ secrets.UAT_ENCRYPTION_KEY }}
+          UAT_INTERNAL_API_KEY: ${{ secrets.UAT_INTERNAL_API_KEY }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          CREDIT_API_KEY: ${{ secrets.CREDIT_API_KEY }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+        run: bash scripts/ci/sync-secrets.sh
+
       - uses: opentofu/setup-opentofu@v1
         with:
-          tofu_version: 1.13.1
-
-      - name: Write private tfvars
-        env:
-          PRIVATE_TFVARS: ${{ secrets.TOFU_PRIVATE_TFVARS }}
-          NEON_TFVARS: ${{ secrets.TOFU_NEON_TFVARS }}
-        run: |
-          printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
-          printf '%s' "$NEON_TFVARS" > neon.auto.tfvars
+          tofu_version: ${{ env.TOFU_VERSION }}
 
       - uses: actions/download-artifact@v4
         with:
           name: tfplan
           path: tofu
 
-      - run: tofu init -input=false
-      # Applies exactly the plan the reviewer saw; fails if state moved meanwhile.
-      - run: tofu apply -input=false tfplan
+      # The saved plan carries every variable value, so no tfvars are needed here.
+      - name: Apply the reviewed plan
+        working-directory: tofu
+        run: |
+          tofu init -input=false
+          tofu apply -input=false tfplan
+
+  secrets-only:
+    if: ${{ inputs.secrets_only }}
+    runs-on: ubuntu-latest
+    environment: infra-uat
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.TOFU_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Sync secrets -> Secret Manager
+        env:
+          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
+          NEON_CREDIT_PASSWORD: ${{ secrets.NEON_CREDIT_PASSWORD }}
+          UAT_JWT_SECRET: ${{ secrets.UAT_JWT_SECRET }}
+          UAT_ENCRYPTION_KEY: ${{ secrets.UAT_ENCRYPTION_KEY }}
+          UAT_INTERNAL_API_KEY: ${{ secrets.UAT_INTERNAL_API_KEY }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
+          R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
+          CREDIT_API_KEY: ${{ secrets.CREDIT_API_KEY }}
+          MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+        run: bash scripts/ci/sync-secrets.sh

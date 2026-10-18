@@ -1,24 +1,22 @@
 # Tofu owns the secret *containers* and who can read them — never the values.
-# Add a value with:  gcloud secrets versions add <name> --data-file=<file>
+# Values: GitHub Environment `infra-uat` secrets, synced by the tofu workflow (scripts/ci/sync-secrets.sh).
 
 locals {
-  # Created by hand in Jul/Aug 2026 — adopted via imports.tf.
-  imported_secret_names = toset([
+  # All exist before tofu runs (hand-made in Jul/Aug 2026, or scripts/bootstrap-gcp.sh) and are adopted
+  # via imports.tf. Values are synced from GitHub secrets by scripts/ci/sync-secrets.sh.
+  secret_names = toset([
     "credit-api-key",
+    "credit-db-password", # creditService's own database
     "db-password",
     "encryption-key",
     "google-client-secret",
+    "internal-api-key", # X-Internal-Key for /api/v1/internal/** (Cloud Scheduler -> cph)
     "jwt-secret",
     "mail-password",
     "r2-access-key",
     "r2-secret-key",
     "redis-password",
   ])
-
-  secret_names = setunion(local.imported_secret_names, toset([
-    "credit-db-password", # creditService's own database
-    "internal-api-key",   # X-Internal-Key for /api/v1/internal/** (Cloud Scheduler -> cph)
-  ]))
 
   cph_secret_env = {
     SPRING_DATASOURCE_PASSWORD = "db-password"

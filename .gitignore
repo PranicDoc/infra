@@ -5,10 +5,11 @@
 tfplan
 plan.txt
 crash.log
-private.auto.tfvars
-neon.auto.tfvars
 *_override.tf
 override.tf
+# generated in CI from GitHub variables (scripts/ci/write-tfvars.sh)
+ci.auto.tfvars.json
+*.auto.tfvars
 
 # Ansible
 *.retry
