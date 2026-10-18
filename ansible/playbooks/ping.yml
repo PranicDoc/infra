@@ -1,0 +1,20 @@
+---
+# Read-only connectivity check: SSH works, Docker is usable, and the compose stack is listed.
+# Changes nothing — run by .github/workflows/vm-check.yml.
+- name: Check the prod VM
+  hosts: prod
+  gather_facts: false
+  tasks:
+    - name: Reach the VM over SSH
+      ansible.builtin.ping:
+
+    - name: List compose services
+      ansible.builtin.command:
+        cmd: docker compose ps --format '{% raw %}{{.Service}}: {{.Status}}{% endraw %}'
+        chdir: "{{ app_dir }}"
+      register: services
+      changed_when: false
+
+    - name: Show services
+      ansible.builtin.debug:
+        var: services.stdout_lines

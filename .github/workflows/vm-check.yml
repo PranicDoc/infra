@@ -1,0 +1,26 @@
+name: VM check
+
+# Read-only: proves GitHub Actions can reach the prod VM with the deploy credentials (environment
+# `prod`: VM_HOST, VM_USER, VM_SSH_KEY) and that Docker / the compose stack are usable. Runs
+# ansible/playbooks/ping.yml, which changes nothing — so no approval needed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/ansible-vm
+        with:
+          playbook: ping.yml
+          host: ${{ secrets.VM_HOST }}
+          user: ${{ secrets.VM_USER }}
+          ssh_key: ${{ secrets.VM_SSH_KEY }}
+          password: ${{ secrets.VM_PASSWORD }}
