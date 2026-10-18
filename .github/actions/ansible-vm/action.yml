@@ -26,6 +26,9 @@ inputs:
   password:
     description: SSH password (used only when no key is given)
     default: ""
+  become_password:
+    description: sudo password for the SSH user — only for playbooks with become (provision.yml)
+    default: ""
 
 runs:
   using: composite
@@ -54,6 +57,7 @@ runs:
         HOST: ${{ inputs.host }}
         KEY: ${{ inputs.ssh_key }}
         PASSWORD: ${{ inputs.password }}
+        BECOME_PASSWORD: ${{ inputs.become_password }}
       run: |
         install -m 700 -d ~/.ssh
         ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
@@ -63,6 +67,9 @@ runs:
           jq -n --arg k "$HOME/.ssh/vm" '{ansible_ssh_private_key_file: $k}' > "$creds"
         else
           jq -n --arg p "$PASSWORD" '{ansible_password: $p}' > "$creds"
+        fi
+        if [ -n "$BECOME_PASSWORD" ]; then
+          jq --arg b "$BECOME_PASSWORD" '. + {ansible_become_password: $b}' "$creds" > "$creds.tmp" && mv "$creds.tmp" "$creds"
         fi
         chmod 600 "$creds"
 

@@ -6,7 +6,8 @@ name: Ansible — prod VM
 # Manual-only on purpose: GitHub Free can't require a reviewer on private-repo Environments,
 # so "Run workflow" is the human approval step for touching prod.
 #
-# Secrets (environment `prod`): VM_HOST, VM_USER, and VM_SSH_KEY or VM_PASSWORD.
+# Secrets (environment `prod`): VM_HOST, VM_USER, VM_SSH_KEY (or VM_PASSWORD), and VM_BECOME_PASSWORD
+# (the user's sudo password — provision.yml installs packages as root).
 
 on:
   push:
@@ -69,3 +70,4 @@ jobs:
           user: ${{ secrets.VM_USER }}
           ssh_key: ${{ secrets.VM_SSH_KEY }}
           password: ${{ secrets.VM_PASSWORD }}
+          become_password: ${{ secrets.VM_BECOME_PASSWORD }}   # lee's sudo password (provision.yml uses become)
