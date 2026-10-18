@@ -5,8 +5,8 @@ Neon free Postgres). Everything runs from GitHub Actions; nothing is run on a la
 
 | Layer | Folder | Runs when | Touches |
 |---|---|---|---|
-| Provisioning (UAT) | `tofu/` + `tofu.yml` | PR → plan; merge to `main` → secret sync + apply (`infra-uat` approval) | Cloud Run cph + creditService, Secret Manager, Artifact Registry, Cloud Scheduler, WIF, budget |
-| Configuration (prod VM) | `ansible/` + `ansible.yml` | merge to `main` → provision (`vm-prod` approval) | packages, Docker log rotation, `/opt/pranicdoc/bin/deploy.sh`, image prune cron |
+| Provisioning (UAT) | `tofu/` + `tofu.yml` | PR / merge → plan; **Run workflow** (`apply`) → secret sync + apply | Cloud Run cph + creditService, Secret Manager, Artifact Registry, Cloud Scheduler, WIF, budget |
+| Configuration (prod VM) | `ansible/` + `ansible.yml` | PR / merge → lint; **Run workflow** → provision (dry run by default) | packages, Docker log rotation, `/opt/pranicdoc/bin/deploy.sh`, image prune cron |
 | Deployment | `deploy-cloudrun.yml`, `deploy-vm.yml` | called by app repos after a build | UAT image swap with auto-rollback · prod `deploy.sh` |
 
 **Ownership rules**
@@ -54,7 +54,7 @@ containers. It prints two values for step 3.
 | `NEON_CREDIT_USERNAME`, `NEON_PORT`, `NEON_USE_POOLER` | optional: same user, `5432`, `false` |
 | `GOOGLE_CLIENT_ID`, `R2_ENDPOINT`, `MAIL_USERNAME`, `REDIS_HOST`, `WHATSAPP_PHONE_NUMBER_ID` | |
 
-**Environments → `infra-uat`** (add yourself as required reviewer), then its **secrets**:
+**Environments → `infra-uat`** secrets (set 2026-10-18; the org is on GitHub Free, so Environments have no reviewer gate. Applies and prod provisioning are manual **Run workflow** instead):
 
 | Secret | Goes to Secret Manager |
 |---|---|
@@ -66,13 +66,13 @@ containers. It prints two values for step 3.
 Unset secrets are skipped, so the current value stays.
 
 Also:
-- **Environments:** create `cloudrun-uat` and `vm-prod`, each with you as required reviewer.
+- **Environments:** `infra-uat`, `cloudrun-uat` and `vm-prod` exist (created 2026-10-18).
 - **Settings → Actions → General → Access:** *accessible from repositories in the organization*.
 - **Org-level secrets:** `VM_HOST`, `VM_SSH_USER`, `VM_SSH_KEY` (an SSH **key**; the old workflows use `VM_PASSWORD`).
 
 ### 4. Run it
-**Actions → OpenTofu — GCP UAT → Run workflow** (or merge a change to `tofu/`). Approve the `infra-uat`
-deployment. The job syncs secrets, then applies the plan it showed you.
+**Actions → OpenTofu — GCP UAT → Run workflow**, tick **apply**. The run plans, syncs secrets into Secret
+Manager, then applies that plan. Merges to `main` only plan, so check the plan before you run with **apply**.
 
 ### 5. Afterwards
 - **Outbox sweep:** set `enable_outbox_sweep = true` in `tofu/uat.tfvars` and merge.

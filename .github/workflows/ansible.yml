@@ -1,8 +1,10 @@
 name: Ansible — prod VM
 
-# Merge to main touching ansible/ -> provision the prod VM (packages, Docker
-# settings, deploy script), behind the `vm-prod` Environment (required
-# reviewer). Manual runs default to a dry run (--check --diff).
+# PR / merge to main touching ansible/ -> lint + syntax check only.
+# Run workflow (manual)                -> provision the prod VM (packages, Docker settings,
+#                                         deploy script); defaults to a dry run (--check --diff).
+# Manual-only on purpose: GitHub Free can't require a reviewer on private-repo Environments,
+# so "Run workflow" is the human approval step for touching prod.
 #
 # Secrets: VM_HOST, VM_SSH_USER, VM_SSH_KEY (same as deploy-vm.yml).
 
@@ -42,7 +44,7 @@ jobs:
 
   provision:
     needs: lint
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: vm-prod
     steps:
@@ -65,7 +67,7 @@ jobs:
           VM_SSH_USER: ${{ secrets.VM_SSH_USER }}
         run: |
           FLAGS=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.check_only }}" = "true" ]; then
+          if [ "${{ inputs.check_only }}" = "true" ]; then
             FLAGS="--check --diff"
           fi
           ansible-playbook playbooks/provision.yml $FLAGS \
