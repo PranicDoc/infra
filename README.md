@@ -30,22 +30,30 @@ Neon free Postgres). Three layers, one repo:
 Nothing applied yet. A local read-only plan against the live project shows 13 imports, 52 adds, 1 change (cph env), 0 destroys.
 
 ## UAT setup, in order
-1. **Neon:** create a project (region Singapore), databases `pranic_doc` and `credit_service`, and one role. Note
-   the **pooled** and **direct** hosts.
+1. **Neon:** in the project, create a second database `credit_service` next to the cph one. Then run:
+   ```powershell
+   pwsh -File scripts/configure-neon-uat.ps1            # prompts for the connection string (hidden)
+   # or: -ConnectionString 'postgresql://...' [-CreditDatabase credit_service] [-DestroyOldVersions]
+   ```
+   The script:
+   - writes `tofu/neon.auto.tfvars` (hosts, user, database names; gitignored)
+   - stores the password in `db-password` and `credit-db-password`
+   - checks that Neon is reachable
+
+   Re-run it once the first apply has created `credit-db-password`.
 2. **R2:** create the bucket `pranicdoc-pdfs-uat`.
 3. **Secret values.** UAT must not share prod's values: give it its own jwt / encryption keys so a UAT token
    never works on prod.
    ```powershell
    # new values for UAT
-   gcloud secrets versions add db-password --data-file=neon-password.txt
+   # (db-password / credit-db-password are set by configure-neon-uat.ps1)
    gcloud secrets versions add jwt-secret --data-file=uat-jwt.txt
    gcloud secrets versions add encryption-key --data-file=uat-enc.txt
-   # created by tofu in step 5; add values right after
-   gcloud secrets versions add credit-db-password --data-file=neon-password.txt
+   # created by tofu in step 5; add the value right after
    gcloud secrets versions add internal-api-key --data-file=internal-key.txt
    ```
    Then destroy the old versions.
-4. `cp tofu/private.auto.tfvars.example tofu/private.auto.tfvars` and fill it in with the Neon hosts.
+4. `cp tofu/private.auto.tfvars.example tofu/private.auto.tfvars` and fill it in (OAuth client id, R2, mail, Redis).
 5. `pwsh -File scripts/bootstrap.ps1` (state bucket + plan), then `-Apply`.
    - If the first apply fails on `credit-db-password` / `internal-api-key` having no version, add the values
      (step 3) and apply again.
@@ -53,7 +61,8 @@ Nothing applied yet. A local read-only plan against the live project shows 13 im
 7. **Google OAuth:** add the cph Cloud Run URL's `/cph/login/oauth2/code/google` as an authorised redirect URI.
 8. Create the GitHub repo `PranicDoc/infra` (private) and push. Then configure:
    - **Variables:** `GCP_WORKLOAD_IDENTITY_PROVIDER`, `TOFU_SERVICE_ACCOUNT` (from `tofu output`)
-   - **Secrets:** `TOFU_PRIVATE_TFVARS` (content of `private.auto.tfvars`); org-level `VM_HOST`, `VM_SSH_USER`,
+   - **Secrets:** `TOFU_PRIVATE_TFVARS` (content of `private.auto.tfvars`), `TOFU_NEON_TFVARS` (content of
+     `neon.auto.tfvars`); org-level `VM_HOST`, `VM_SSH_USER`,
      `VM_SSH_KEY`. This is an SSH **key**; the old workflows use `VM_PASSWORD`.
    - **Environments:** `infra-uat`, `cloudrun-uat` and `vm-prod`, each with you as required reviewer
    - **Settings → Actions → Access:** "accessible from repositories in the organization"

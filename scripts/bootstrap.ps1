@@ -28,6 +28,9 @@ $tofuDir = Join-Path $PSScriptRoot '..\tofu'
 if (-not (Test-Path (Join-Path $tofuDir 'private.auto.tfvars'))) {
   throw "Create tofu/private.auto.tfvars from private.auto.tfvars.example first."
 }
+if (-not (Test-Path (Join-Path $tofuDir 'neon.auto.tfvars'))) {
+  Write-Warning "tofu/neon.auto.tfvars missing — UAT would deploy without database settings. Run scripts/configure-neon-uat.ps1 first."
+}
 
 Push-Location $tofuDir
 try {

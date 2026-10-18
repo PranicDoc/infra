@@ -14,6 +14,26 @@ locals {
     },
     var.enable_creditservice ? { CREDIT_SERVICE_URL = "${module.creditservice[0].uri}/credits" } : {},
   )
+
+  # JDBC settings built from var.uat_db (Neon). App traffic goes through Neon's pooler (PgBouncer,
+  # hence prepareThreshold=0); Flyway and creditService use the direct host, since advisory locks and
+  # server-side prepared statements need a real session.
+  db = var.uat_db
+  cph_db_env = local.db == null ? {} : {
+    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${local.db.pooled_host}:${local.db.port}/${local.db.cph_database}?sslmode=require&prepareThreshold=0&reWriteBatchedInserts=true"
+    SPRING_DATASOURCE_USERNAME = local.db.username
+    SPRING_FLYWAY_URL          = "jdbc:postgresql://${local.db.direct_host}:${local.db.port}/${local.db.cph_database}?sslmode=require"
+    DB_HOST                    = local.db.direct_host
+    DB_PORT                    = tostring(local.db.port)
+    DB_USERNAME                = local.db.username
+  }
+  credit_db_env = local.db == null ? {} : {
+    CREDIT_DB_HOST     = local.db.direct_host
+    CREDIT_DB_PORT     = tostring(local.db.port)
+    CREDIT_DB_USERNAME = local.db.username
+    # creditService's yml hard-codes the database name; this lets UAT choose it.
+    SPRING_DATASOURCE_URL = "jdbc:postgresql://${local.db.direct_host}:${local.db.port}/${local.db.credit_database}?sslmode=require"
+  }
 }
 
 module "cph" {
@@ -32,7 +52,7 @@ module "cph" {
   max_instances = var.cph.max_instances
   concurrency   = var.cph.concurrency
 
-  env        = merge(var.cph_env, local.cph_cloudrun_env, var.cph_env_private)
+  env        = merge(var.cph_env, local.cph_cloudrun_env, local.cph_db_env, var.cph_env_private)
   secret_env = local.cph_secret_env
 
   depends_on = [google_secret_manager_secret_iam_member.readers]
@@ -67,7 +87,7 @@ module "creditservice" {
   memory                = "512Mi"
   # cph calls it with SERVICE_API_KEY and no Google identity token, so it has to be invocable.
   public     = true
-  env        = merge(var.creditservice_env, var.creditservice_env_private)
+  env        = merge(var.creditservice_env, local.credit_db_env, var.creditservice_env_private)
   secret_env = var.creditservice_secret_env
 
   depends_on = [google_secret_manager_secret_iam_member.readers]

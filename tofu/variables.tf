@@ -68,6 +68,19 @@ variable "cph_env" {
   default     = {}
 }
 
+variable "uat_db" {
+  description = "Neon UAT Postgres. Written by scripts/configure-neon-uat.ps1 into neon.auto.tfvars (gitignored). Passwords are in Secret Manager, never here."
+  type = object({
+    pooled_host     = string # ep-xxx-pooler.<region>.aws.neon.tech — cph app traffic
+    direct_host     = string # ep-xxx.<region>.aws.neon.tech — Flyway + creditService
+    port            = optional(number, 5432)
+    username        = string
+    cph_database    = string
+    credit_database = string
+  })
+  default = null
+}
+
 variable "cph_env_private" {
   description = "Private-but-not-secret env for cph (DB host, usernames, OAuth client id). Kept in the gitignored private.auto.tfvars; CI writes it from the TOFU_PRIVATE_TFVARS secret."
   type        = map(string)

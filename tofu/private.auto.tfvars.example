@@ -2,28 +2,13 @@
 # file content into the infra repo secret TOFU_PRIVATE_TFVARS.
 # Not secrets (those live in Secret Manager) — just values we don't publish.
 #
-# UAT database: Neon (free), one project with two databases: pranic_doc and credit_service.
-# Neon gives two hosts per branch:
-#   pooled  ep-xxx-pooler.<region>.aws.neon.tech  -> app traffic (PgBouncer; needs prepareThreshold=0)
-#   direct  ep-xxx.<region>.aws.neon.tech         -> Flyway (advisory locks need a real session)
+# Database settings are NOT here: run scripts/configure-neon-uat.ps1, which
+# writes tofu/neon.auto.tfvars and stores the password in Secret Manager.
 
 cph_env_private = {
-  SPRING_DATASOURCE_URL      = "jdbc:postgresql://<pooled-host>/pranic_doc?sslmode=require&prepareThreshold=0&reWriteBatchedInserts=true"
-  SPRING_DATASOURCE_USERNAME = "<neon role>"
-  SPRING_FLYWAY_URL          = "jdbc:postgresql://<direct-host>/pranic_doc?sslmode=require"
-  DB_HOST                    = "<direct-host>"
-  DB_PORT                    = "5432"
-  DB_USERNAME                = "<neon role>"
-  GOOGLE_CLIENT_ID           = "<...>.apps.googleusercontent.com"
-  R2_ENDPOINT                = "https://<account>.r2.cloudflarestorage.com"
-  MAIL_USERNAME              = "<smtp user>"
-  WHATSAPP_PHONE_NUMBER_ID   = ""
-  SPRING_DATA_REDIS_HOST     = "<name>.upstash.io"
-}
-
-creditservice_env_private = {
-  # Direct host: creditService's JDBC URL has no prepareThreshold=0 (needed behind a pooler).
-  CREDIT_DB_HOST     = "<direct-host>"
-  CREDIT_DB_PORT     = "5432"
-  CREDIT_DB_USERNAME = "<neon role>"
+  GOOGLE_CLIENT_ID         = "<...>.apps.googleusercontent.com"
+  R2_ENDPOINT              = "https://<account>.r2.cloudflarestorage.com"
+  MAIL_USERNAME            = "<smtp user>"
+  WHATSAPP_PHONE_NUMBER_ID = ""
+  SPRING_DATA_REDIS_HOST   = "<name>.upstash.io"
 }

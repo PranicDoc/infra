@@ -8,6 +8,7 @@ name: OpenTofu — GCP UAT
 #   vars.GCP_WORKLOAD_IDENTITY_PROVIDER  output `workload_identity_provider`
 #   vars.TOFU_SERVICE_ACCOUNT            output `tofu_service_account`
 #   secrets.TOFU_PRIVATE_TFVARS          content of tofu/private.auto.tfvars
+#   secrets.TOFU_NEON_TFVARS             content of tofu/neon.auto.tfvars (scripts/configure-neon-uat.ps1)
 
 on:
   pull_request:
@@ -47,7 +48,10 @@ jobs:
       - name: Write private tfvars
         env:
           PRIVATE_TFVARS: ${{ secrets.TOFU_PRIVATE_TFVARS }}
-        run: printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
+          NEON_TFVARS: ${{ secrets.TOFU_NEON_TFVARS }}
+        run: |
+          printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
+          printf '%s' "$NEON_TFVARS" > neon.auto.tfvars
 
       - run: tofu fmt -recursive -check
       - run: tofu init -input=false
@@ -90,7 +94,10 @@ jobs:
       - name: Write private tfvars
         env:
           PRIVATE_TFVARS: ${{ secrets.TOFU_PRIVATE_TFVARS }}
-        run: printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
+          NEON_TFVARS: ${{ secrets.TOFU_NEON_TFVARS }}
+        run: |
+          printf '%s' "$PRIVATE_TFVARS" > private.auto.tfvars
+          printf '%s' "$NEON_TFVARS" > neon.auto.tfvars
 
       - uses: actions/download-artifact@v4
         with:
