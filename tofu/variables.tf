@@ -48,7 +48,7 @@ variable "existing_budget_id" {
 # ─── Databases ───────────────────────────────────────────────────────────────
 
 variable "databases" {
-  description = "Per service (keys: cph, creditservice). Built in CI from <SERVICE>_DB_* GitHub Environment variables by scripts/ci/write-tfvars.sh. Passwords live in Secret Manager, never here."
+  description = "Per service (keys: cph, creditservice, pdfworker). Built in CI from the CPH_DB_* / CREDIT_DB_* / PDF_WORKER_DB_* GitHub Environment variables by scripts/ci/write-tfvars.sh. Passwords live in Secret Manager, never here."
   type = map(object({
     host     = string # direct host: Flyway (advisory locks need a real session) and, by default, app traffic
     port     = optional(number, 5432)

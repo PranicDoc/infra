@@ -12,7 +12,8 @@ the VM (`213.199.38.16`, docker-compose). Everything runs from GitHub Actions.
 ## How environments work
 An environment is three things with the same name, here `uat`:
 1. **The GitHub Environment** `uat` (Settings → Environments). It holds the values, with the **same variable
-   and secret names in every environment**.
+   and secret names in every environment**. Each service has its own full database set; repeat the
+   values when services share a server.
 2. **`tofu/envs/uat.tfvars`**: only sizing and feature flags, committed.
 3. **A GCP project**, prepared once with `scripts/bootstrap-gcp.sh <project> <billing-account>`.
 
@@ -29,10 +30,10 @@ Environments can't require a reviewer.
 | Name | Meaning |
 |---|---|
 | `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_REGION`, `GCP_BILLING_ACCOUNT`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `TOFU_SERVICE_ACCOUNT` | printed by `bootstrap-gcp.sh` |
-| `DB_HOST`, `DB_NAME`, `DB_USERNAME` | cph's database (direct host). These are the names cph itself reads. |
-| `DB_PORT`, `DB_POOLER_HOST` | optional: port (default 5432); PgBouncer host for app traffic (Flyway stays direct) |
-| `CREDIT_DB_NAME` | creditService's database. It must differ from `DB_NAME`: each service runs its own Flyway. |
-| `CREDIT_DB_HOST`, `CREDIT_DB_PORT`, `CREDIT_DB_USERNAME`, `CREDIT_DB_POOLER_HOST` | only if creditService is on a different server; unset ones default to the `DB_*` values |
+| `CPH_DB_HOST`, `CPH_DB_NAME`, `CPH_DB_USERNAME` | cph's database (direct host) |
+| `CREDIT_DB_HOST`, `CREDIT_DB_NAME`, `CREDIT_DB_USERNAME` | creditService's database. It must differ from cph's: each service runs its own Flyway. |
+| `PDF_WORKER_DB_HOST`, `PDF_WORKER_DB_NAME`, `PDF_WORKER_DB_USERNAME` | pdfWorker's database: **the same values as `CPH_DB_*`**, because pdfWorker polls cph's `pdf_job` table |
+| `<SERVICE>_DB_PORT`, `<SERVICE>_DB_POOLER_HOST` | optional, per service: port (default 5432); PgBouncer host for app traffic (Flyway stays direct) |
 | `GOOGLE_CLIENT_ID`, `R2_ENDPOINT`, `MAIL_USERNAME`, `REDIS_HOST`, `WHATSAPP_PHONE_NUMBER_ID` | app settings |
 
 **Environment secrets**: copied into that project's Secret Manager by the apply job. Unset secrets
@@ -40,8 +41,7 @@ keep their current value.
 
 | GitHub secret | Secret Manager |
 |---|---|
-| `DB_PASSWORD` | `db-password` |
-| `CREDIT_DB_PASSWORD` (optional, defaults to `DB_PASSWORD`) | `credit-db-password` |
+| `CPH_DB_PASSWORD`, `CREDIT_DB_PASSWORD`, `PDF_WORKER_DB_PASSWORD` | `db-password`, `credit-db-password`, `pdfworker-db-password` |
 | `JWT_SECRET`, `ENCRYPTION_KEY`, `INTERNAL_API_KEY` | `jwt-secret`, `encryption-key`, `internal-api-key`. **Each environment gets its own values.** |
 | `GOOGLE_CLIENT_SECRET`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `CREDIT_API_KEY`, `MAIL_PASSWORD`, `REDIS_PASSWORD` | same names, kebab-case |
 

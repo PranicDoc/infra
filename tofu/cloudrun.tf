@@ -38,6 +38,20 @@ locals {
     # creditService's yml hard-codes the database name; this makes it configurable.
     SPRING_DATASOURCE_URL = "jdbc:postgresql://${local.credit_db.host}:${local.credit_db.port}/${local.credit_db.name}?sslmode=require"
   }
+
+  # pdfWorker polls cph's pdf_job table, so PDF_WORKER_DB_* normally holds the same values as CPH_DB_*.
+  # Its yml binds spring.datasource.pdf-job.* (database name hard-coded); the env var overrides it.
+  pdfworker_db = lookup(var.databases, "pdfworker", null)
+  pdfworker_db_env = local.pdfworker_db == null ? {} : {
+    SPRING_DATASOURCE_PDFJOB_URL = (local.pdfworker_db.pooler_host == null
+      ? "jdbc:postgresql://${local.pdfworker_db.host}:${local.pdfworker_db.port}/${local.pdfworker_db.name}?sslmode=require"
+    : "jdbc:postgresql://${local.pdfworker_db.pooler_host}:${local.pdfworker_db.port}/${local.pdfworker_db.name}?sslmode=require&prepareThreshold=0")
+    DB_USERNAME = local.pdfworker_db.username
+  }
+  pdfworker_secret_env = merge(
+    var.pdfworker_secret_env,
+    local.pdfworker_db == null ? {} : { DB_PASSWORD = "pdfworker-db-password" },
+  )
 }
 
 module "cph" {
@@ -73,8 +87,8 @@ module "pdfworker" {
   port                  = 8080
   memory                = "1Gi"
   concurrency           = 2 # PDF rendering is CPU-heavy; Cloud Tasks also caps dispatch rate
-  env                   = var.pdfworker_env
-  secret_env            = var.pdfworker_secret_env
+  env                   = merge(var.pdfworker_env, local.pdfworker_db_env)
+  secret_env            = local.pdfworker_secret_env
 
   depends_on = [google_secret_manager_secret_iam_member.readers]
 }

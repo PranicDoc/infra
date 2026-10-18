@@ -14,12 +14,13 @@ name: OpenTofu
 #   Variables
 #     GCP_PROJECT_ID, GCP_PROJECT_NUMBER, GCP_REGION, GCP_BILLING_ACCOUNT, TF_STATE_BUCKET,
 #     GCP_WORKLOAD_IDENTITY_PROVIDER, TOFU_SERVICE_ACCOUNT          (printed by bootstrap-gcp.sh)
-#     DB_HOST, DB_NAME, DB_USERNAME, [DB_PORT, DB_POOLER_HOST]      (cph — same names cph reads)
-#     CREDIT_DB_NAME, [CREDIT_DB_HOST, CREDIT_DB_PORT, CREDIT_DB_USERNAME, CREDIT_DB_POOLER_HOST]
-#                                                  (creditService; unset ones default to DB_*)
+#     One full set per service (repeat values where services share a server):
+#       CPH_DB_HOST / _NAME / _USERNAME / [_PORT, _POOLER_HOST]
+#       CREDIT_DB_HOST / _NAME / _USERNAME / [_PORT, _POOLER_HOST]
+#       PDF_WORKER_DB_HOST / _NAME / _USERNAME / [_PORT, _POOLER_HOST]   (= cph's database)
 #     GOOGLE_CLIENT_ID, R2_ENDPOINT, MAIL_USERNAME, REDIS_HOST, [WHATSAPP_PHONE_NUMBER_ID]
 #   Secrets (unset = keep the current Secret Manager value)
-#     DB_PASSWORD, [CREDIT_DB_PASSWORD], JWT_SECRET, ENCRYPTION_KEY, INTERNAL_API_KEY,
+#     CPH_DB_PASSWORD, CREDIT_DB_PASSWORD, PDF_WORKER_DB_PASSWORD, JWT_SECRET, ENCRYPTION_KEY, INTERNAL_API_KEY,
 #     GOOGLE_CLIENT_SECRET, R2_ACCESS_KEY, R2_SECRET_KEY, CREDIT_API_KEY, MAIL_PASSWORD, REDIS_PASSWORD
 
 on:
@@ -81,11 +82,16 @@ jobs:
 
       - name: Environment variables -> tofu/ci.auto.tfvars.json
         env:
-          DB_HOST: ${{ vars.DB_HOST }}
-          DB_PORT: ${{ vars.DB_PORT }}
-          DB_NAME: ${{ vars.DB_NAME }}
-          DB_USERNAME: ${{ vars.DB_USERNAME }}
-          DB_POOLER_HOST: ${{ vars.DB_POOLER_HOST }}
+          CPH_DB_HOST: ${{ vars.CPH_DB_HOST }}
+          CPH_DB_PORT: ${{ vars.CPH_DB_PORT }}
+          CPH_DB_NAME: ${{ vars.CPH_DB_NAME }}
+          CPH_DB_USERNAME: ${{ vars.CPH_DB_USERNAME }}
+          CPH_DB_POOLER_HOST: ${{ vars.CPH_DB_POOLER_HOST }}
+          PDF_WORKER_DB_HOST: ${{ vars.PDF_WORKER_DB_HOST }}
+          PDF_WORKER_DB_PORT: ${{ vars.PDF_WORKER_DB_PORT }}
+          PDF_WORKER_DB_NAME: ${{ vars.PDF_WORKER_DB_NAME }}
+          PDF_WORKER_DB_USERNAME: ${{ vars.PDF_WORKER_DB_USERNAME }}
+          PDF_WORKER_DB_POOLER_HOST: ${{ vars.PDF_WORKER_DB_POOLER_HOST }}
           CREDIT_DB_HOST: ${{ vars.CREDIT_DB_HOST }}
           CREDIT_DB_PORT: ${{ vars.CREDIT_DB_PORT }}
           CREDIT_DB_NAME: ${{ vars.CREDIT_DB_NAME }}
@@ -142,7 +148,8 @@ jobs:
       - name: Sync secrets -> Secret Manager
         env:
           GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          CPH_DB_PASSWORD: ${{ secrets.CPH_DB_PASSWORD }}
+          PDF_WORKER_DB_PASSWORD: ${{ secrets.PDF_WORKER_DB_PASSWORD }}
           CREDIT_DB_PASSWORD: ${{ secrets.CREDIT_DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
@@ -188,7 +195,8 @@ jobs:
       - name: Sync secrets -> Secret Manager
         env:
           GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          CPH_DB_PASSWORD: ${{ secrets.CPH_DB_PASSWORD }}
+          PDF_WORKER_DB_PASSWORD: ${{ secrets.PDF_WORKER_DB_PASSWORD }}
           CREDIT_DB_PASSWORD: ${{ secrets.CREDIT_DB_PASSWORD }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}

@@ -15,6 +15,7 @@ locals {
     "jwt-secret",
     "mail-password",
     "r2-access-key",
+    "pdfworker-db-password",
     "r2-secret-key",
     "redis-password",
   ])
@@ -36,7 +37,7 @@ locals {
   # runtime SA email => secrets it may read (only the ones its env references)
   secret_readers = merge(
     { for s in distinct(values(local.cph_secret_env)) : "cph/${s}" => { sa = google_service_account.cph_runtime.email, secret = s } },
-    var.enable_pdfworker ? { for s in distinct(values(var.pdfworker_secret_env)) : "pdfworker/${s}" => { sa = google_service_account.pdfworker_runtime[0].email, secret = s } } : {},
+    var.enable_pdfworker ? { for s in distinct(values(local.pdfworker_secret_env)) : "pdfworker/${s}" => { sa = google_service_account.pdfworker_runtime[0].email, secret = s } } : {},
     var.enable_creditservice ? { for s in distinct(values(var.creditservice_secret_env)) : "creditservice/${s}" => { sa = google_service_account.creditservice_runtime[0].email, secret = s } } : {},
   )
 }

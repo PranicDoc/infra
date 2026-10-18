@@ -26,7 +26,7 @@ TOFU_SA="github-tofu@${PROJECT}.iam.gserviceaccount.com"
 POOL="github"
 PROVIDER="github-oidc"
 SECRETS=(credit-api-key credit-db-password db-password encryption-key google-client-secret
-         internal-api-key jwt-secret mail-password r2-access-key r2-secret-key redis-password)
+         internal-api-key jwt-secret mail-password pdfworker-db-password r2-access-key r2-secret-key redis-password)
 
 gcloud config set project "$PROJECT" >/dev/null
 
