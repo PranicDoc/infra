@@ -2,16 +2,18 @@ name: Deploy to prod VM (reusable)
 
 # Runs /opt/pranicdoc/bin/deploy.sh on the prod VM — a script installed and
 # kept current by ansible/ (role `app`). The deploy logic lives in this repo,
-# so app repos don't need to check it out.
+# so app repos don't need to check it out. Nothing deploys until an approver
+# comments "approve" on the issue this workflow opens.
 #
 # Caller example:
 #
 #   deploy-prod:
 #     needs: build
+#     permissions: { contents: read, issues: write }   # issues: approval gate
 #     uses: PranicDoc/infra/.github/workflows/deploy-vm.yml@main
 #     with:
 #       services: cph
-#     secrets: inherit   # VM_HOST, VM_SSH_USER, VM_SSH_KEY (org-level secrets)
+#     secrets: inherit   # VM_HOST, VM_SSH_USER, VM_SSH_KEY
 
 on:
   workflow_call:
@@ -21,9 +23,13 @@ on:
         type: string
         required: true
       environment:
-        description: GitHub Environment gating the rollout (add required reviewers there)
+        description: GitHub Environment holding the VM secrets
         type: string
         default: prod
+      approvers:
+        description: GitHub users (comma-separated) who must approve before anything is deployed
+        type: string
+        default: user-lee-005
     secrets:
       VM_HOST:
         required: true
@@ -33,7 +39,29 @@ on:
         required: true
 
 jobs:
+  # GitHub Free can't require Environment reviewers on private repos, so the gate is an issue in
+  # the calling repo: comment "approve" to deploy, "deny" to cancel.
+  approval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      issues: write
+    steps:
+      - uses: trstringer/manual-approval@v1.13.1
+        with:
+          secret: ${{ github.token }}
+          approvers: ${{ inputs.approvers }}
+          minimum-approvals: 1
+          exclude-workflow-initiator-as-approver: false
+          issue-title: "Deploy ${{ inputs.services }} to the prod VM"
+          issue-body: |
+            **${{ inputs.services }}** from `${{ github.repository }}@${{ github.sha }}` is ready to deploy to the **prod VM**.
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Comment **approve** to deploy or **deny** to cancel.
+
   deploy:
+    needs: approval
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
