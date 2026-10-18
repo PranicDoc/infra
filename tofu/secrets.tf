@@ -2,7 +2,8 @@
 # Add a value with:  gcloud secrets versions add <name> --data-file=<file>
 
 locals {
-  secret_names = toset([
+  # Created by hand in Jul/Aug 2026 — adopted via imports.tf.
+  imported_secret_names = toset([
     "credit-api-key",
     "db-password",
     "encryption-key",
@@ -13,6 +14,11 @@ locals {
     "r2-secret-key",
     "redis-password",
   ])
+
+  secret_names = setunion(local.imported_secret_names, toset([
+    "credit-db-password", # creditService's own database
+    "internal-api-key",   # X-Internal-Key for /api/v1/internal/** (Cloud Scheduler -> cph)
+  ]))
 
   cph_secret_env = {
     SPRING_DATASOURCE_PASSWORD = "db-password"
@@ -25,6 +31,7 @@ locals {
     CREDIT_API_KEY             = "credit-api-key"
     MAIL_PASSWORD              = "mail-password"
     SPRING_DATA_REDIS_PASSWORD = "redis-password"
+    INTERNAL_API_KEY           = "internal-api-key"
   }
 
   # runtime SA email => secrets it may read (only the ones its env references)

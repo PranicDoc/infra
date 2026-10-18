@@ -61,6 +61,12 @@ variable "ingress" {
   default = "INGRESS_TRAFFIC_ALL"
 }
 
+variable "public" {
+  description = "Let anyone invoke it (allUsers); the app's own auth (JWT / API key) protects it."
+  type        = bool
+  default     = false
+}
+
 resource "google_cloud_run_v2_service" "this" {
   name                = var.name
   location            = var.region
@@ -126,6 +132,15 @@ resource "google_cloud_run_v2_service" "this" {
       template[0].labels,
     ]
   }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "public" {
+  count = var.public ? 1 : 0
+
+  name     = google_cloud_run_v2_service.this.name
+  location = var.region
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 output "name" {

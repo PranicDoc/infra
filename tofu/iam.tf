@@ -73,6 +73,7 @@ resource "google_project_iam_member" "tofu" {
     "roles/secretmanager.admin",
     "roles/artifactregistry.admin",
     "roles/cloudtasks.admin",
+    "roles/cloudscheduler.admin",
     "roles/serviceusage.serviceUsageAdmin",
   ])
 

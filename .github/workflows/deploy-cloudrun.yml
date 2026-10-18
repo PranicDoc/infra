@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run (reusable)
+name: Deploy to Cloud Run — UAT (reusable)
 
 # Called from cph / pdfWorker / credit-service after their image is pushed to
 # Artifact Registry. Only swaps the image — env, secrets, scaling and IAM are
@@ -49,7 +49,7 @@ on:
       environment:
         description: GitHub Environment gating the rollout (add required reviewers there)
         type: string
-        default: cloudrun-production
+        default: cloudrun-uat
 
 jobs:
   deploy:

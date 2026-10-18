@@ -1,8 +1,8 @@
 all:
   children:
-    uat:
+    prod:
       hosts:
-        uat-vm:
+        prod-vm:
           # CI passes ansible_host / ansible_user from secrets; these are the
           # local-run defaults.
           ansible_host: 213.199.38.16

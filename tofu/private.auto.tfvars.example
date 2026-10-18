@@ -1,13 +1,19 @@
 # Copy to private.auto.tfvars (gitignored) and fill in. For CI, paste the same
 # file content into the infra repo secret TOFU_PRIVATE_TFVARS.
 # Not secrets (those live in Secret Manager) — just values we don't publish.
+#
+# UAT database: Neon (free), one project with two databases: pranic_doc and credit_service.
+# Neon gives two hosts per branch:
+#   pooled  ep-xxx-pooler.<region>.aws.neon.tech  -> app traffic (PgBouncer; needs prepareThreshold=0)
+#   direct  ep-xxx.<region>.aws.neon.tech         -> Flyway (advisory locks need a real session)
 
 cph_env_private = {
-  SPRING_DATASOURCE_URL      = "jdbc:postgresql://<aiven-host>:<port>/pranic_doc?sslmode=require"
-  SPRING_DATASOURCE_USERNAME = "<aiven app user>"
-  DB_HOST                    = "<aiven-host>"
-  DB_PORT                    = "<port>"
-  DB_USERNAME                = "<aiven app user>"
+  SPRING_DATASOURCE_URL      = "jdbc:postgresql://<pooled-host>/pranic_doc?sslmode=require&prepareThreshold=0&reWriteBatchedInserts=true"
+  SPRING_DATASOURCE_USERNAME = "<neon role>"
+  SPRING_FLYWAY_URL          = "jdbc:postgresql://<direct-host>/pranic_doc?sslmode=require"
+  DB_HOST                    = "<direct-host>"
+  DB_PORT                    = "5432"
+  DB_USERNAME                = "<neon role>"
   GOOGLE_CLIENT_ID           = "<...>.apps.googleusercontent.com"
   R2_ENDPOINT                = "https://<account>.r2.cloudflarestorage.com"
   MAIL_USERNAME              = "<smtp user>"
@@ -15,8 +21,9 @@ cph_env_private = {
   SPRING_DATA_REDIS_HOST     = "<name>.upstash.io"
 }
 
-# Fill these when enable_pdfworker / enable_creditservice go true.
-# pdfworker_env            = {}
-# pdfworker_secret_env     = { JWT_SECRET = "jwt-secret", DB_PASSWORD = "db-password", R2_ACCESS_KEY = "r2-access-key", R2_SECRET_KEY = "r2-secret-key" }
-# creditservice_env        = {}
-# creditservice_secret_env = { CREDIT_API_KEY = "credit-api-key" }
+creditservice_env_private = {
+  # Direct host: creditService's JDBC URL has no prepareThreshold=0 (needed behind a pooler).
+  CREDIT_DB_HOST     = "<direct-host>"
+  CREDIT_DB_PORT     = "5432"
+  CREDIT_DB_USERNAME = "<neon role>"
+}

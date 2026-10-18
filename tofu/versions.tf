@@ -11,7 +11,7 @@ terraform {
   # Created once by scripts/bootstrap.ps1 (versioned, uniform access, asia-south1).
   backend "gcs" {
     bucket = "pranicdoc-tfstate-567095892493"
-    prefix = "prod"
+    prefix = "uat" # this project is UAT; prod runs on the VM (ansible/)
   }
 }
 

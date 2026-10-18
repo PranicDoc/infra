@@ -1,6 +1,6 @@
 ---
-- name: Provision UAT VM
-  hosts: uat
+- name: Provision prod VM
+  hosts: prod
   become: true
   roles:
     - base

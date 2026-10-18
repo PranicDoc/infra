@@ -32,6 +32,6 @@ if (-not (Test-Path (Join-Path $tofuDir 'private.auto.tfvars'))) {
 Push-Location $tofuDir
 try {
   tofu init -input=false
-  tofu plan -input=false -var-file=prod.tfvars -out=tfplan
+  tofu plan -input=false '-var-file=uat.tfvars' -out=tfplan
   if ($Apply) { tofu apply -input=false tfplan; tofu output }
 } finally { Pop-Location }

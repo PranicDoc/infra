@@ -1,5 +1,19 @@
 locals {
   image_base = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}"
+
+  # First-create image for services CI hasn't deployed yet: Google's sample, which listens on $PORT.
+  # After the first `gcloud run deploy`, CI owns the image (ignore_changes in the module).
+  placeholder_image = "us-docker.pkg.dev/cloudrun/container/hello"
+
+  # Scale-to-zero Cloud Run: no in-process timers, send outbox rows inline (see cph spec
+  # docs/superpowers/specs/2026-10-18-outbox-eager-dispatch.md).
+  cph_cloudrun_env = merge(
+    {
+      APP_NOTIFICATIONS_DISPATCH                = "sync"
+      APP_NOTIFICATIONS_SWEEP_SCHEDULER_ENABLED = "false"
+    },
+    var.enable_creditservice ? { CREDIT_SERVICE_URL = "${module.creditservice[0].uri}/credits" } : {},
+  )
 }
 
 module "cph" {
@@ -10,6 +24,7 @@ module "cph" {
   image                 = "${local.image_base}/cph:latest"
   service_account_email = google_service_account.cph_runtime.email
   port                  = 9918
+  public                = true # UAT testers use it from the browser; JWT protects the API
 
   cpu           = var.cph.cpu
   memory        = var.cph.memory
@@ -17,13 +32,11 @@ module "cph" {
   max_instances = var.cph.max_instances
   concurrency   = var.cph.concurrency
 
-  env        = merge(var.cph_env, var.cph_env_private)
+  env        = merge(var.cph_env, local.cph_cloudrun_env, var.cph_env_private)
   secret_env = local.cph_secret_env
 
   depends_on = [google_secret_manager_secret_iam_member.readers]
 }
-
-# ─── Off until cutover (enable_* in prod.tfvars) ─────────────────────────────
 
 module "pdfworker" {
   source = "./modules/cloudrun-service"
@@ -31,7 +44,7 @@ module "pdfworker" {
 
   name                  = "pdfworker"
   region                = var.region
-  image                 = "${local.image_base}/pdfworker:latest"
+  image                 = local.placeholder_image
   service_account_email = google_service_account.pdfworker_runtime[0].email
   port                  = 8080
   memory                = "1Gi"
@@ -48,22 +61,14 @@ module "creditservice" {
 
   name                  = "creditservice"
   region                = var.region
-  image                 = "${local.image_base}/creditservice:latest"
+  image                 = local.placeholder_image
   service_account_email = google_service_account.creditservice_runtime[0].email
   port                  = 9112
   memory                = "512Mi"
-  env                   = var.creditservice_env
-  secret_env            = var.creditservice_secret_env
+  # cph calls it with SERVICE_API_KEY and no Google identity token, so it has to be invocable.
+  public     = true
+  env        = merge(var.creditservice_env, var.creditservice_env_private)
+  secret_env = var.creditservice_secret_env
 
   depends_on = [google_secret_manager_secret_iam_member.readers]
-}
-
-# cph is the only caller of creditService.
-resource "google_cloud_run_v2_service_iam_member" "creditservice_invoker" {
-  count = var.enable_creditservice ? 1 : 0
-
-  name     = module.creditservice[0].name
-  location = var.region
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.cph_runtime.email}"
 }

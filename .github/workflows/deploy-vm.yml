@@ -1,0 +1,49 @@
+name: Deploy to prod VM (reusable)
+
+# Runs /opt/pranicdoc/bin/deploy.sh on the prod VM — a script installed and
+# kept current by ansible/ (role `app`). The deploy logic lives in this repo,
+# so app repos don't need to check it out.
+#
+# Caller example:
+#
+#   deploy-prod:
+#     needs: build
+#     uses: PranicDoc/infra/.github/workflows/deploy-vm.yml@main
+#     with:
+#       services: cph
+#     secrets: inherit   # VM_HOST, VM_SSH_USER, VM_SSH_KEY (org-level secrets)
+
+on:
+  workflow_call:
+    inputs:
+      services:
+        description: Space-separated compose service names, e.g. "cph ui"
+        type: string
+        required: true
+      environment:
+        description: GitHub Environment gating the rollout (add required reviewers there)
+        type: string
+        default: vm-prod
+    secrets:
+      VM_HOST:
+        required: true
+      VM_SSH_USER:
+        required: true
+      VM_SSH_KEY:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        env:
+          SERVICES: ${{ inputs.services }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_SSH_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          envs: SERVICES
+          script_stop: true
+          script: /opt/pranicdoc/bin/deploy.sh $SERVICES

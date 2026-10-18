@@ -63,7 +63,7 @@ variable "cph" {
 }
 
 variable "cph_env" {
-  description = "Non-secret, non-private env for cph (URLs, ports, flags). Committed in prod.tfvars."
+  description = "Non-secret, non-private env for cph (URLs, ports, flags). Committed in uat.tfvars."
   type        = map(string)
   default     = {}
 }
@@ -75,7 +75,7 @@ variable "cph_env_private" {
   sensitive   = true
 }
 
-# ─── Services not yet on Cloud Run — off until cutover ───────────────────────
+# ─── Optional services ───────────────────────────────────────────────────────
 
 variable "enable_pdfworker" {
   type    = bool
@@ -85,6 +85,12 @@ variable "enable_pdfworker" {
 variable "enable_creditservice" {
   type    = bool
   default = false
+}
+
+variable "enable_outbox_sweep" {
+  description = "Cloud Scheduler job that calls cph's outbox sweep every 30 min. Needs a value in the internal-api-key secret first."
+  type        = bool
+  default     = false
 }
 
 variable "enable_cloud_tasks" {
@@ -106,9 +112,16 @@ variable "pdfworker_secret_env" {
 }
 
 variable "creditservice_env" {
-  type      = map(string)
-  default   = {}
-  sensitive = true
+  description = "Non-private env for creditService. Committed in uat.tfvars."
+  type        = map(string)
+  default     = {}
+}
+
+variable "creditservice_env_private" {
+  description = "Private env for creditService (DB host, username). private.auto.tfvars."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
 }
 
 variable "creditservice_secret_env" {

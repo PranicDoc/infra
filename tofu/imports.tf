@@ -12,7 +12,7 @@ import {
 }
 
 import {
-  for_each = local.secret_names
+  for_each = local.imported_secret_names
   to       = google_secret_manager_secret.app[each.value]
   id       = "projects/${var.project_id}/secrets/${each.value}"
 }

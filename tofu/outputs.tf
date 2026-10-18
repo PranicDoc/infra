@@ -17,6 +17,10 @@ output "cph_url" {
   value = module.cph.uri
 }
 
+output "creditservice_url" {
+  value = var.enable_creditservice ? module.creditservice[0].uri : null
+}
+
 output "pdf_jobs_queue" {
   value = var.enable_cloud_tasks ? google_cloud_tasks_queue.pdf_jobs[0].id : null
 }

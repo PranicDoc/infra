@@ -1,56 +1,85 @@
 # PranicDoc infra
 
-Prod on GCP (asia-south1), UAT on the VM. Three layers, one repo:
+**Prod is the VM** (`213.199.38.16`, docker-compose). **UAT is GCP Cloud Run** (asia-south1, scale to zero,
+Neon free Postgres). Three layers, one repo:
 
 | Layer | Folder | Runs when | Touches |
 |---|---|---|---|
-| Provisioning | `tofu/` | PR → plan; merge to `main` → apply (reviewer-gated) | Cloud Run services, Secret Manager containers + IAM, Artifact Registry, Cloud Tasks, WIF, budget |
-| Configuration | `ansible/` | merge to `main` → provision UAT VM | packages, Docker log rotation, `/opt/pranicdoc/bin/deploy.sh`, image prune cron |
-| Deployment | `.github/workflows/deploy-*.yml` | called by app repos after a build | swaps the image on Cloud Run (auto-rollback) or runs `deploy.sh` on the VM |
+| Provisioning (UAT) | `tofu/` | PR → plan; merge to `main` → apply (`infra-uat` reviewer) | Cloud Run cph + creditService, Secret Manager containers + IAM, Artifact Registry, Cloud Scheduler, WIF, budget |
+| Configuration (prod VM) | `ansible/` | merge to `main` → provision (`vm-prod` reviewer) | packages, Docker log rotation, `/opt/pranicdoc/bin/deploy.sh`, image prune cron |
+| Deployment | `.github/workflows/deploy-*.yml` | called by app repos after a build | `deploy-cloudrun.yml`: UAT image swap with auto-rollback · `deploy-vm.yml`: prod `deploy.sh` |
 
-**Ownership rule:** tofu owns service *config*; CI owns the *image*. Never change Cloud Run settings in the console — change `tofu/` and merge.
+**Ownership rules**
+- **Config vs image.** Tofu owns Cloud Run *config*; CI owns the *image*. Don't change Cloud Run settings in the console.
+- **Secret values.** Tofu creates secret entries and who may read them, never the values. Set a value with
+  `gcloud secrets versions add <name> --data-file=<file>`, then destroy the old version (6 live versions are free).
 
-**Secrets:** tofu creates the secret entries and who may read them, never the values. Add or rotate a value with `gcloud secrets versions add <name> --data-file=<file>`, then destroy the old version (6 live versions are free).
+## What runs where
 
-## Status (2026-10-16)
+| | Prod (VM) | UAT (Cloud Run) |
+|---|---|---|
+| cph | ✅ | ✅ `min_instances=0` |
+| creditService | ✅ | ✅ scale to zero |
+| pdfWorker | ✅ (polls DB every 1 s) | ❌ PDFs stay DRAFT in UAT |
+| Outbox send | async after commit | inline after commit (`APP_NOTIFICATIONS_DISPATCH=sync`) |
+| Outbox sweep (30 min) | in-process `@Scheduled` | Cloud Scheduler → `POST /cph/api/v1/internal/notifications/sweep` |
+| Database | Aiven | Neon free (`pranic_doc`, `credit_service`) |
+| R2 bucket | `pranicdoc-pdfs` | `pranicdoc-pdfs-uat` |
 
-- Nothing applied yet. A local read-only plan against the live project: 13 imports, 40 adds, 0 destroys.
-- Prod still points at the VM URLs and Aiven; switching is a later step (`prod.tfvars`).
-- pdfWorker / creditService / Cloud Tasks are behind `enable_*` flags, all `false`.
-- The UAT database split is undecided.
+## Status (2026-10-18)
+Nothing applied yet. A local read-only plan against the live project shows 13 imports, 52 adds, 1 change (cph env), 0 destroys.
 
-## First-time setup
+## UAT setup, in order
+1. **Neon:** create a project (region Singapore), databases `pranic_doc` and `credit_service`, and one role. Note
+   the **pooled** and **direct** hosts.
+2. **R2:** create the bucket `pranicdoc-pdfs-uat`.
+3. **Secret values.** UAT must not share prod's values: give it its own jwt / encryption keys so a UAT token
+   never works on prod.
+   ```powershell
+   # new values for UAT
+   gcloud secrets versions add db-password --data-file=neon-password.txt
+   gcloud secrets versions add jwt-secret --data-file=uat-jwt.txt
+   gcloud secrets versions add encryption-key --data-file=uat-enc.txt
+   # created by tofu in step 5; add values right after
+   gcloud secrets versions add credit-db-password --data-file=neon-password.txt
+   gcloud secrets versions add internal-api-key --data-file=internal-key.txt
+   ```
+   Then destroy the old versions.
+4. `cp tofu/private.auto.tfvars.example tofu/private.auto.tfvars` and fill it in with the Neon hosts.
+5. `pwsh -File scripts/bootstrap.ps1` (state bucket + plan), then `-Apply`.
+   - If the first apply fails on `credit-db-password` / `internal-api-key` having no version, add the values
+     (step 3) and apply again.
+6. Set `enable_outbox_sweep = true` in `uat.tfvars` and apply again.
+7. **Google OAuth:** add the cph Cloud Run URL's `/cph/login/oauth2/code/google` as an authorised redirect URI.
+8. Create the GitHub repo `PranicDoc/infra` (private) and push. Then configure:
+   - **Variables:** `GCP_WORKLOAD_IDENTITY_PROVIDER`, `TOFU_SERVICE_ACCOUNT` (from `tofu output`)
+   - **Secrets:** `TOFU_PRIVATE_TFVARS` (content of `private.auto.tfvars`); org-level `VM_HOST`, `VM_SSH_USER`,
+     `VM_SSH_KEY`. This is an SSH **key**; the old workflows use `VM_PASSWORD`.
+   - **Environments:** `infra-uat`, `cloudrun-uat` and `vm-prod`, each with you as required reviewer
+   - **Settings → Actions → Access:** "accessible from repositories in the organization"
+9. In cph and credit-service, set `GCP_SERVICE_ACCOUNT` to the `deployer_service_account` output.
 
-1. `cp tofu/private.auto.tfvars.example tofu/private.auto.tfvars` and fill it in (values are in `cph/deploy/.env.deploy`).
-2. `pwsh -File scripts/bootstrap.ps1`: creates the state bucket, inits, and plans. Review the plan, then rerun with `-Apply`.
-3. Create the GitHub repo `PranicDoc/infra` (private), then push.
-4. In the infra repo:
-   - Variables: `GCP_WORKLOAD_IDENTITY_PROVIDER`, `TOFU_SERVICE_ACCOUNT` (from `tofu output`)
-   - Secret: `TOFU_PRIVATE_TFVARS` (content of `private.auto.tfvars`)
-   - Environments: `infra-prod` and `uat`, each with you as required reviewer
-   - Settings → Actions → General → Access: *accessible from repositories in the organization* (lets app repos call the reusable workflows)
-5. Org-level secrets for UAT: `UAT_HOST`, `UAT_SSH_USER`, `UAT_SSH_KEY`. This is an SSH **key**; the old workflows use `VM_PASSWORD`. Add the public key to `~/.ssh/authorized_keys` on the VM.
-6. In cph, pdfWorker and credit-service, set `GCP_SERVICE_ACCOUNT` to the `deployer_service_account` output and `GCP_WORKLOAD_IDENTITY_PROVIDER` to the provider. Their build workflows already push to Artifact Registry once these exist.
+**After moving the project into a Cloud Identity organization:** new orgs enforce *Domain restricted sharing*,
+which blocks the `allUsers` invoker that cph / creditService need. Override
+`iam.allowedPolicyMemberDomains` on this project.
 
-## Wiring app repos (at cutover)
-
-Add a job after `build` in each app repo:
+## Wiring app repos
 
 ```yaml
-deploy-prod:
+deploy-uat:                       # after build pushes to Artifact Registry
   needs: build
   permissions: { contents: read, id-token: write }
   uses: PranicDoc/infra/.github/workflows/deploy-cloudrun.yml@main
   with:
-    service: cph
-    image: asia-south1-docker.pkg.dev/project-62583e23-5e4b-48e7-b00/all-in-one/cph:sha-${{ github.sha }}  # match the build's tag format
+    service: cph                  # creditservice: health_path /credits/actuator/health
+    image: asia-south1-docker.pkg.dev/project-62583e23-5e4b-48e7-b00/all-in-one/cph:sha-<short sha from build>
     health_path: /cph/actuator/health
     workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
     service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
-deploy-uat:
+deploy-prod:
   needs: build
-  uses: PranicDoc/infra/.github/workflows/deploy-uat.yml@main
+  uses: PranicDoc/infra/.github/workflows/deploy-vm.yml@main
   with: { services: cph }
   secrets: inherit
 ```
@@ -59,7 +88,7 @@ deploy-uat:
 
 | Want | Do |
 |---|---|
-| Keep cph warm (no cold starts) | `prod.tfvars`: `cph.min_instances = 1` (about ₹1,300/mo) |
-| Move pdfWorker to Cloud Run | fill `pdfworker_*` in private tfvars, set `enable_pdfworker` and `enable_cloud_tasks` to `true` |
+| No cold starts on UAT | `uat.tfvars`: `cph.min_instances = 1` (about ₹1,300/mo) |
+| PDFs in UAT | pdfWorker needs the poller-removal change first; then set `enable_pdfworker` and `enable_cloud_tasks` |
 | Change budget | `budget_amount_inr` |
-| Rebuild UAT VM | fresh Ubuntu → copy `.env` → run the Ansible workflow |
+| Rebuild prod VM | fresh Ubuntu → copy `.env` → run the Ansible workflow |

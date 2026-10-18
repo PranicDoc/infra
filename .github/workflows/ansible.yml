@@ -1,9 +1,10 @@
-name: Ansible — UAT VM
+name: Ansible — prod VM
 
-# Merge to main touching ansible/ -> provision the UAT VM (packages, Docker
-# settings, deploy script). Manual runs can dry-run with --check first.
+# Merge to main touching ansible/ -> provision the prod VM (packages, Docker
+# settings, deploy script), behind the `vm-prod` Environment (required
+# reviewer). Manual runs default to a dry run (--check --diff).
 #
-# Secrets: UAT_HOST, UAT_SSH_USER, UAT_SSH_KEY (same as deploy-uat.yml).
+# Secrets: VM_HOST, VM_SSH_USER, VM_SSH_KEY (same as deploy-vm.yml).
 
 on:
   push:
@@ -19,7 +20,7 @@ on:
         default: true
 
 concurrency:
-  group: ansible-uat
+  group: ansible-prod
   cancel-in-progress: false
 
 permissions:
@@ -43,7 +44,7 @@ jobs:
     needs: lint
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    environment: uat
+    environment: vm-prod
     steps:
       - uses: actions/checkout@v4
       - run: pip install ansible-core==2.17.*
@@ -51,22 +52,22 @@ jobs:
 
       - name: SSH key
         env:
-          KEY: ${{ secrets.UAT_SSH_KEY }}
-          HOST: ${{ secrets.UAT_HOST }}
+          KEY: ${{ secrets.VM_SSH_KEY }}
+          HOST: ${{ secrets.VM_HOST }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/uat && chmod 600 ~/.ssh/uat
+          printf '%s\n' "$KEY" > ~/.ssh/vm && chmod 600 ~/.ssh/vm
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
 
       - name: Run playbook
         env:
-          UAT_HOST: ${{ secrets.UAT_HOST }}
-          UAT_SSH_USER: ${{ secrets.UAT_SSH_USER }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_SSH_USER: ${{ secrets.VM_SSH_USER }}
         run: |
           FLAGS=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.check_only }}" = "true" ]; then
             FLAGS="--check --diff"
           fi
           ansible-playbook playbooks/provision.yml $FLAGS \
-            -e ansible_host="$UAT_HOST" -e ansible_user="$UAT_SSH_USER" \
-            --private-key ~/.ssh/uat
+            -e ansible_host="$VM_HOST" -e ansible_user="$VM_SSH_USER" \
+            --private-key ~/.ssh/vm

@@ -1,8 +1,8 @@
-name: OpenTofu — GCP prod
+name: OpenTofu — GCP UAT
 
 # PR touching tofu/  -> plan, summary posted to the job page.
-# Merge to main      -> plan again + apply, behind the `infra-prod` Environment
-#                       (Settings -> Environments -> infra-prod -> Required reviewers).
+# Merge to main      -> plan again + apply, behind the `infra-uat` Environment
+#                       (Settings -> Environments -> infra-uat -> Required reviewers).
 #
 # Repo config (Settings -> Secrets and variables -> Actions):
 #   vars.GCP_WORKLOAD_IDENTITY_PROVIDER  output `workload_identity_provider`
@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: tofu-prod
+  group: tofu-uat
   cancel-in-progress: false # never interrupt an apply
 
 permissions:
@@ -55,7 +55,7 @@ jobs:
 
       - name: Plan
         run: |
-          tofu plan -input=false -var-file=prod.tfvars -out=tfplan -no-color | tee plan.txt
+          tofu plan -input=false -var-file=uat.tfvars -out=tfplan -no-color | tee plan.txt
           {
             echo '## OpenTofu plan'
             echo '```'
@@ -74,7 +74,7 @@ jobs:
     needs: plan
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: infra-prod
+    environment: infra-uat
     steps:
       - uses: actions/checkout@v4
 

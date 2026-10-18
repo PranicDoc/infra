@@ -2,7 +2,7 @@ app_dir: /opt/pranicdoc
 
 # Docker daemon settings change only take effect after a daemon restart, which
 # restarts every container on the VM. Leave false unless you're in a window
-# where UAT may blip.
+# where prod may blip for a few seconds.
 docker_allow_restart: false
 
 # The VM's docker-compose.yml and .env are NOT managed yet — the files on the
