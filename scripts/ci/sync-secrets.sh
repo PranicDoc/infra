@@ -40,8 +40,8 @@ sync() {
 }
 
 # Secret Manager name    GitHub Environment secret (same names in every environment)
-sync db-password          "${CPH_DB_PASSWORD:-}"
-sync credit-db-password   "${CREDIT_DB_PASSWORD:-}"
+sync db-password          "${DB_PASSWORD:-}"
+sync credit-db-password   "${CREDIT_DB_PASSWORD:-${DB_PASSWORD:-}}"   # defaults to DB_PASSWORD
 sync jwt-secret           "${JWT_SECRET:-}"
 sync encryption-key       "${ENCRYPTION_KEY:-}"
 sync internal-api-key     "${INTERNAL_API_KEY:-}"
