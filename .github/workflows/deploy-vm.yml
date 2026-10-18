@@ -23,7 +23,7 @@ on:
       environment:
         description: GitHub Environment gating the rollout (add required reviewers there)
         type: string
-        default: vm-prod
+        default: prod
     secrets:
       VM_HOST:
         required: true

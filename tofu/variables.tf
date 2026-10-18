@@ -1,18 +1,64 @@
+# ─── Which environment, and where it lives ──────────────────────────────────
+# Same code for every environment. The GitHub Environment of the same name supplies the values
+# below as TF_VAR_* (see .github/workflows/tofu.yml); envs/<environment>.tfvars holds sizing/flags.
+
+variable "environment" {
+  description = "uat, prod, ... — matches the GitHub Environment and tofu/envs/<environment>.tfvars."
+  type        = string
+}
+
 variable "project_id" {
-  type = string
+  description = "GitHub Environment variable GCP_PROJECT_ID."
+  type        = string
 }
 
 variable "project_number" {
-  type = string
+  description = "GitHub Environment variable GCP_PROJECT_NUMBER."
+  type        = string
 }
 
 variable "region" {
-  type    = string
-  default = "asia-south1"
+  description = "GitHub Environment variable GCP_REGION."
+  type        = string
+  default     = "asia-south1"
 }
 
 variable "billing_account_id" {
-  type = string
+  description = "GitHub Environment variable GCP_BILLING_ACCOUNT."
+  type        = string
+}
+
+variable "state_bucket" {
+  description = "GitHub Environment variable TF_STATE_BUCKET (created by scripts/bootstrap-gcp.sh)."
+  type        = string
+}
+
+variable "adopt_existing" {
+  description = "Import resources that were created by hand before tofu managed this project (cph service, its runtime SA, Artifact Registry repo)."
+  type        = bool
+  default     = false
+}
+
+variable "existing_budget_id" {
+  description = "Import this already-existing billing budget instead of creating one."
+  type        = string
+  default     = null
+}
+
+# ─── Databases ───────────────────────────────────────────────────────────────
+
+variable "databases" {
+  description = "Per service (keys: cph, creditservice). Built in CI from <SERVICE>_DB_* GitHub Environment variables by scripts/ci/write-tfvars.sh. Passwords live in Secret Manager, never here."
+  type = map(object({
+    host     = string # direct host: Flyway (advisory locks need a real session) and, by default, app traffic
+    port     = optional(number, 5432)
+    name     = string
+    username = string
+    # Optional PgBouncer (transaction mode) host for app traffic; server-side prepared statements
+    # are then turned off (prepareThreshold=0). Flyway always uses `host`.
+    pooler_host = optional(string)
+  }))
+  default = {}
 }
 
 variable "github_owner" {
@@ -63,23 +109,9 @@ variable "cph" {
 }
 
 variable "cph_env" {
-  description = "Non-secret, non-private env for cph (URLs, ports, flags). Committed in uat.tfvars."
+  description = "Non-secret, non-private env for cph (URLs, ports, flags). Committed in envs/<environment>.tfvars."
   type        = map(string)
   default     = {}
-}
-
-variable "uat_db" {
-  description = "Neon UAT Postgres, built in CI from the NEON_* repo variables (scripts/ci/write-tfvars.sh). Passwords are in Secret Manager, never here."
-  type = object({
-    pooled_host     = string # cph app traffic: the direct host, or ep-xxx-pooler.<region>.aws.neon.tech with -UsePooler
-    direct_host     = string # ep-xxx.<region>.aws.neon.tech — Flyway + creditService
-    port            = optional(number, 5432)
-    username        = string
-    cph_database    = string
-    credit_username = optional(string) # defaults to username
-    credit_database = string
-  })
-  default = null
 }
 
 variable "cph_env_private" {
@@ -126,13 +158,13 @@ variable "pdfworker_secret_env" {
 }
 
 variable "creditservice_env" {
-  description = "Non-private env for creditService. Committed in uat.tfvars."
+  description = "Non-private env for creditService. Committed in envs/<environment>.tfvars."
   type        = map(string)
   default     = {}
 }
 
 variable "creditservice_env_private" {
-  description = "Extra private env for creditService (DB settings come from uat_db)."
+  description = "Extra private env for creditService (DB settings come from var.databases)."
   type        = map(string)
   default     = {}
   sensitive   = true

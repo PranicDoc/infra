@@ -89,7 +89,7 @@ resource "google_billing_account_iam_member" "tofu_budgets" {
 }
 
 resource "google_storage_bucket_iam_member" "tofu_state" {
-  bucket = "pranicdoc-tfstate-${var.project_number}"
+  bucket = var.state_bucket
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.tofu.email}"
 }

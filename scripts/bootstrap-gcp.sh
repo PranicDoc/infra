@@ -5,19 +5,22 @@
 # Run it in Cloud Shell (console.cloud.google.com -> the >_ icon) as a project owner and
 # billing admin. Nothing to install. It's idempotent: re-running only fills gaps.
 #
-#   bash bootstrap-gcp.sh            # paste the file into Cloud Shell, or upload it
+#   bash bootstrap-gcp.sh <gcp-project-id> <billing-account-id> [region]
+#   e.g. bash bootstrap-gcp.sh project-62583e23-5e4b-48e7-b00 01DE97-95AA80-8044CD
 #
+# Same script for every environment (one GCP project per environment).
 # Creates: required APIs, the OpenTofu state bucket, the GitHub OIDC trust (WIF pool + provider),
 # the github-tofu service account and its roles, and the (empty) app secret containers.
 # The tofu workflow then adopts all of it (tofu/imports.tf) and manages it from there.
+# At the end it prints the variables to add to that environment in GitHub.
 set -euo pipefail
 
-PROJECT="project-62583e23-5e4b-48e7-b00"
-PROJECT_NUMBER="567095892493"
-BILLING_ACCOUNT="01DE97-95AA80-8044CD"   # update when the company billing account replaces it
-REGION="asia-south1"
-GITHUB_OWNER="PranicDoc"
-INFRA_REPO="infra"
+PROJECT="${1:?usage: bootstrap-gcp.sh <gcp-project-id> <billing-account-id> [region]}"
+BILLING_ACCOUNT="${2:?usage: bootstrap-gcp.sh <gcp-project-id> <billing-account-id> [region]}"
+REGION="${3:-asia-south1}"
+GITHUB_OWNER="${GITHUB_OWNER:-PranicDoc}"
+INFRA_REPO="${INFRA_REPO:-infra}"
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 BUCKET="pranicdoc-tfstate-${PROJECT_NUMBER}"
 TOFU_SA="github-tofu@${PROJECT}.iam.gserviceaccount.com"
 POOL="github"
@@ -77,7 +80,13 @@ done
 
 cat <<EOF
 
-Done. In GitHub -> PranicDoc/infra -> Settings -> Secrets and variables -> Actions -> Variables:
+Done. Add these to the GitHub Environment for this project
+(PranicDoc/infra -> Settings -> Environments -> <env> -> Environment variables):
+  GCP_PROJECT_ID                 = ${PROJECT}
+  GCP_PROJECT_NUMBER             = ${PROJECT_NUMBER}
+  GCP_REGION                     = ${REGION}
+  GCP_BILLING_ACCOUNT            = ${BILLING_ACCOUNT}
+  TF_STATE_BUCKET                = ${BUCKET}
   GCP_WORKLOAD_IDENTITY_PROVIDER = projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/providers/${PROVIDER}
   TOFU_SERVICE_ACCOUNT           = ${TOFU_SA}
 EOF

@@ -1,26 +1,25 @@
-name: OpenTofu — GCP UAT
+name: OpenTofu
 
-# Everything for UAT runs here; nothing is run locally (except the one-time Cloud Shell
-# bootstrap, scripts/bootstrap-gcp.sh, which creates the trust this workflow logs in with).
+# One codebase, any environment. Pick the environment; every value comes from the GitHub Environment
+# of that name (same variable / secret names everywhere) plus tofu/envs/<environment>.tfvars.
 #
-#   PR / merge to main       -> plan only (summary on the job page)
-#   manual, apply = true     -> plan, sync GitHub secrets into Secret Manager, apply that exact plan
-#   manual, secrets_only     -> just sync secrets (rotate a password without touching infra)
+#   PR / merge to main touching tofu/  -> plan for `uat`
+#   Run workflow, apply = true         -> plan, sync secrets into Secret Manager, apply that exact plan
+#   Run workflow, secrets_only = true  -> only sync secrets (rotate a password without touching infra)
 #
 # Apply is manual-only on purpose: the org is on GitHub Free, where private-repo Environments can't
 # require a reviewer, so "Run workflow" is the human approval step.
 #
-# Settings -> Secrets and variables -> Actions
-#   Repository variables (non-secret, needed by plan on PRs too):
-#     GCP_WORKLOAD_IDENTITY_PROVIDER, TOFU_SERVICE_ACCOUNT        (printed by bootstrap-gcp.sh)
-#     NEON_HOST, NEON_DATABASE, NEON_USERNAME                      (Neon console -> Connect)
-#     NEON_CREDIT_DATABASE (default credit_service), NEON_CREDIT_USERNAME, NEON_PORT, NEON_USE_POOLER
-#     GOOGLE_CLIENT_ID, R2_ENDPOINT, MAIL_USERNAME, WHATSAPP_PHONE_NUMBER_ID, REDIS_HOST
-#   Environment `infra-uat` secrets (only the apply / secrets-only jobs use that environment):
-#     NEON_PASSWORD, NEON_CREDIT_PASSWORD (optional), UAT_JWT_SECRET, UAT_ENCRYPTION_KEY,
-#     UAT_INTERNAL_API_KEY, GOOGLE_CLIENT_SECRET, R2_ACCESS_KEY, R2_SECRET_KEY, CREDIT_API_KEY,
-#     MAIL_PASSWORD, REDIS_PASSWORD
-#   Any secret left unset keeps its current value in Secret Manager.
+# Per GitHub Environment (Settings -> Environments -> <env>):
+#   Variables
+#     GCP_PROJECT_ID, GCP_PROJECT_NUMBER, GCP_REGION, GCP_BILLING_ACCOUNT, TF_STATE_BUCKET,
+#     GCP_WORKLOAD_IDENTITY_PROVIDER, TOFU_SERVICE_ACCOUNT          (printed by bootstrap-gcp.sh)
+#     CPH_DB_HOST, CPH_DB_NAME, CPH_DB_USERNAME, [CPH_DB_PORT, CPH_DB_POOLER_HOST]
+#     CREDIT_DB_HOST, CREDIT_DB_NAME, CREDIT_DB_USERNAME, [CREDIT_DB_PORT, CREDIT_DB_POOLER_HOST]
+#     GOOGLE_CLIENT_ID, R2_ENDPOINT, MAIL_USERNAME, REDIS_HOST, [WHATSAPP_PHONE_NUMBER_ID]
+#   Secrets (unset = keep the current Secret Manager value)
+#     CPH_DB_PASSWORD, CREDIT_DB_PASSWORD, JWT_SECRET, ENCRYPTION_KEY, INTERNAL_API_KEY,
+#     GOOGLE_CLIENT_SECRET, R2_ACCESS_KEY, R2_SECRET_KEY, CREDIT_API_KEY, MAIL_PASSWORD, REDIS_PASSWORD
 
 on:
   pull_request:
@@ -30,17 +29,22 @@ on:
     paths: ["tofu/**", "scripts/ci/**", ".github/workflows/tofu.yml"]
   workflow_dispatch:
     inputs:
+      environment:
+        description: Environment (GitHub Environment + tofu/envs/<name>.tfvars)
+        type: choice
+        options: [uat]
+        default: uat
       apply:
         description: Apply the plan (after syncing secrets)
         type: boolean
         default: false
       secrets_only:
-        description: Only sync GitHub secrets into Secret Manager (no plan / apply)
+        description: Only sync secrets into Secret Manager (no plan / apply)
         type: boolean
         default: false
 
 concurrency:
-  group: tofu-uat
+  group: tofu-${{ inputs.environment || 'uat' }}
   cancel-in-progress: false # never interrupt an apply
 
 permissions:
@@ -48,13 +52,20 @@ permissions:
   id-token: write
 
 env:
-  GCP_PROJECT: project-62583e23-5e4b-48e7-b00
+  ENV_NAME: ${{ inputs.environment || 'uat' }}
   TOFU_VERSION: 1.13.1
 
 jobs:
   plan:
     if: ${{ !inputs.secrets_only }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'uat' }}
+    env:
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_project_number: ${{ vars.GCP_PROJECT_NUMBER }}
+      TF_VAR_region: ${{ vars.GCP_REGION }}
+      TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT }}
+      TF_VAR_state_bucket: ${{ vars.TF_STATE_BUCKET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -67,15 +78,18 @@ jobs:
         with:
           tofu_version: ${{ env.TOFU_VERSION }}
 
-      - name: Settings -> tofu/ci.auto.tfvars.json
+      - name: Environment variables -> tofu/ci.auto.tfvars.json
         env:
-          NEON_HOST: ${{ vars.NEON_HOST }}
-          NEON_PORT: ${{ vars.NEON_PORT }}
-          NEON_DATABASE: ${{ vars.NEON_DATABASE }}
-          NEON_USERNAME: ${{ vars.NEON_USERNAME }}
-          NEON_CREDIT_DATABASE: ${{ vars.NEON_CREDIT_DATABASE }}
-          NEON_CREDIT_USERNAME: ${{ vars.NEON_CREDIT_USERNAME }}
-          NEON_USE_POOLER: ${{ vars.NEON_USE_POOLER }}
+          CPH_DB_HOST: ${{ vars.CPH_DB_HOST }}
+          CPH_DB_PORT: ${{ vars.CPH_DB_PORT }}
+          CPH_DB_NAME: ${{ vars.CPH_DB_NAME }}
+          CPH_DB_USERNAME: ${{ vars.CPH_DB_USERNAME }}
+          CPH_DB_POOLER_HOST: ${{ vars.CPH_DB_POOLER_HOST }}
+          CREDIT_DB_HOST: ${{ vars.CREDIT_DB_HOST }}
+          CREDIT_DB_PORT: ${{ vars.CREDIT_DB_PORT }}
+          CREDIT_DB_NAME: ${{ vars.CREDIT_DB_NAME }}
+          CREDIT_DB_USERNAME: ${{ vars.CREDIT_DB_USERNAME }}
+          CREDIT_DB_POOLER_HOST: ${{ vars.CREDIT_DB_POOLER_HOST }}
           GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
           MAIL_USERNAME: ${{ vars.MAIL_USERNAME }}
@@ -87,15 +101,15 @@ jobs:
         working-directory: tofu
         run: |
           tofu fmt -recursive -check
-          tofu init -input=false
+          tofu init -input=false -backend-config="bucket=${TF_VAR_state_bucket}" -backend-config="prefix=${ENV_NAME}"
           tofu validate
 
       - name: Plan
         working-directory: tofu
         run: |
-          tofu plan -input=false -var-file=uat.tfvars -out=tfplan -no-color | tee plan.txt
+          tofu plan -input=false -var-file="envs/${ENV_NAME}.tfvars" -out=tfplan -no-color | tee plan.txt
           {
-            echo '## OpenTofu plan'
+            echo "## OpenTofu plan — ${ENV_NAME}"
             echo '```'
             grep -E '^(Plan:|No changes|  # )' plan.txt || true
             echo '```'
@@ -104,7 +118,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ inputs.apply }}
         with:
-          name: tfplan
+          name: tfplan-${{ env.ENV_NAME }}
           path: tofu/tfplan
           retention-days: 1
 
@@ -112,7 +126,7 @@ jobs:
     needs: plan
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply && !inputs.secrets_only && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    environment: infra-uat
+    environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -126,11 +140,12 @@ jobs:
       # Before apply: a new Cloud Run revision needs every referenced secret to have a value.
       - name: Sync secrets -> Secret Manager
         env:
-          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
-          NEON_CREDIT_PASSWORD: ${{ secrets.NEON_CREDIT_PASSWORD }}
-          UAT_JWT_SECRET: ${{ secrets.UAT_JWT_SECRET }}
-          UAT_ENCRYPTION_KEY: ${{ secrets.UAT_ENCRYPTION_KEY }}
-          UAT_INTERNAL_API_KEY: ${{ secrets.UAT_INTERNAL_API_KEY }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          CPH_DB_PASSWORD: ${{ secrets.CPH_DB_PASSWORD }}
+          CREDIT_DB_PASSWORD: ${{ secrets.CREDIT_DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}
@@ -145,20 +160,20 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: tfplan
+          name: tfplan-${{ env.ENV_NAME }}
           path: tofu
 
       # The saved plan carries every variable value, so no tfvars are needed here.
       - name: Apply the reviewed plan
         working-directory: tofu
         run: |
-          tofu init -input=false
+          tofu init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" -backend-config="prefix=${ENV_NAME}"
           tofu apply -input=false tfplan
 
   secrets-only:
     if: ${{ inputs.secrets_only }}
     runs-on: ubuntu-latest
-    environment: infra-uat
+    environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -171,11 +186,12 @@ jobs:
 
       - name: Sync secrets -> Secret Manager
         env:
-          NEON_PASSWORD: ${{ secrets.NEON_PASSWORD }}
-          NEON_CREDIT_PASSWORD: ${{ secrets.NEON_CREDIT_PASSWORD }}
-          UAT_JWT_SECRET: ${{ secrets.UAT_JWT_SECRET }}
-          UAT_ENCRYPTION_KEY: ${{ secrets.UAT_ENCRYPTION_KEY }}
-          UAT_INTERNAL_API_KEY: ${{ secrets.UAT_INTERNAL_API_KEY }}
+          GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+          CPH_DB_PASSWORD: ${{ secrets.CPH_DB_PASSWORD }}
+          CREDIT_DB_PASSWORD: ${{ secrets.CREDIT_DB_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          INTERNAL_API_KEY: ${{ secrets.INTERNAL_API_KEY }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           R2_ACCESS_KEY: ${{ secrets.R2_ACCESS_KEY }}
           R2_SECRET_KEY: ${{ secrets.R2_SECRET_KEY }}

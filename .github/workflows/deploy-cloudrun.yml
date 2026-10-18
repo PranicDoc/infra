@@ -1,55 +1,45 @@
-name: Deploy to Cloud Run — UAT (reusable)
+name: Deploy to Cloud Run (reusable)
 
 # Called from cph / pdfWorker / credit-service after their image is pushed to
 # Artifact Registry. Only swaps the image — env, secrets, scaling and IAM are
 # owned by tofu/. If the new revision fails its health check, traffic goes
 # straight back to the previous revision.
 #
-# Caller example (in the app repo):
+# Same call for every environment. The CALLER repo needs a GitHub Environment of
+# that name with variables GCP_PROJECT_ID, GCP_REGION, GCP_WORKLOAD_IDENTITY_PROVIDER,
+# GCP_SERVICE_ACCOUNT (the deployer SA), optional GCP_ARTIFACT_REPO (default all-in-one).
 #
-#   deploy-prod:
+#   deploy:
 #     needs: build
 #     permissions: { contents: read, id-token: write }
 #     uses: PranicDoc/infra/.github/workflows/deploy-cloudrun.yml@main
 #     with:
-#       service: cph
-#       image: asia-south1-docker.pkg.dev/<project>/all-in-one/cph:sha-abc1234
+#       environment: uat
+#       service: cph                       # Cloud Run service name
+#       image_name: cph                    # Artifact Registry image name
+#       image_tag: sha-abc1234             # from the build job (never latest)
 #       health_path: /cph/actuator/health
-#       workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-#       service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-#
-# Requires infra repo Settings -> Actions -> General -> Access:
-# "Accessible from repositories in the 'PranicDoc' organization".
 
 on:
   workflow_call:
     inputs:
+      environment:
+        type: string
+        required: true
       service:
         type: string
         required: true
-      image:
-        description: Full image ref, pinned to a sha tag (never :latest)
+      image_name:
+        description: Artifact Registry image name (defaults to the service name)
+        type: string
+        default: ""
+      image_tag:
+        description: Tag pushed by the build, e.g. sha-abc1234
         type: string
         required: true
       health_path:
         type: string
         default: /actuator/health
-      region:
-        type: string
-        default: asia-south1
-      project_id:
-        type: string
-        default: project-62583e23-5e4b-48e7-b00
-      workload_identity_provider:
-        type: string
-        required: true
-      service_account:
-        type: string
-        required: true
-      environment:
-        description: GitHub Environment gating the rollout (add required reviewers there)
-        type: string
-        default: cloudrun-uat
 
 jobs:
   deploy:
@@ -60,13 +50,14 @@ jobs:
       id-token: write
     env:
       SERVICE: ${{ inputs.service }}
-      REGION: ${{ inputs.region }}
-      PROJECT: ${{ inputs.project_id }}
+      REGION: ${{ vars.GCP_REGION }}
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO || 'all-in-one' }}/${{ inputs.image_name || inputs.service }}:${{ inputs.image_tag }}
     steps:
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ inputs.workload_identity_provider }}
-          service_account: ${{ inputs.service_account }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
@@ -81,7 +72,7 @@ jobs:
       - name: Roll out new image
         run: |
           gcloud run deploy "$SERVICE" --project="$PROJECT" --region="$REGION" \
-            --image="${{ inputs.image }}" --quiet
+            --image="$IMAGE" --quiet
 
       - name: Health check
         id: health
@@ -106,4 +97,4 @@ jobs:
 
       - name: Summary
         if: success()
-        run: echo "Deployed \`${{ inputs.image }}\` to **$SERVICE**" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "Deployed \`$IMAGE\` to **$SERVICE** ($PROJECT)" >> "$GITHUB_STEP_SUMMARY"

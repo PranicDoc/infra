@@ -8,11 +8,10 @@ terraform {
     }
   }
 
-  # Created once by scripts/bootstrap.ps1 (versioned, uniform access, asia-south1).
-  backend "gcs" {
-    bucket = "pranicdoc-tfstate-567095892493"
-    prefix = "uat" # this project is UAT; prod runs on the VM (ansible/)
-  }
+  # Configured per environment at init time (CI):
+  #   tofu init -backend-config="bucket=<TF_STATE_BUCKET>" -backend-config="prefix=<environment>"
+  # The bucket is created by scripts/bootstrap-gcp.sh.
+  backend "gcs" {}
 }
 
 provider "google" {

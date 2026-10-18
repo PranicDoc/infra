@@ -15,26 +15,28 @@ locals {
     var.enable_creditservice ? { CREDIT_SERVICE_URL = "${module.creditservice[0].uri}/credits" } : {},
   )
 
-  # JDBC settings built from var.uat_db (Neon). By default everything uses the direct host. If app
-  # traffic goes through Neon's built-in pooler (PgBouncer, transaction mode), server-side prepared
-  # statements must be off (prepareThreshold=0). Flyway and creditService always connect direct,
-  # because advisory locks need a real session.
-  db          = var.uat_db
-  uses_pooler = local.db == null ? false : strcontains(local.db.pooled_host, "-pooler.")
-  cph_db_env = local.db == null ? {} : {
-    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${local.db.pooled_host}:${local.db.port}/${local.db.cph_database}?sslmode=require&reWriteBatchedInserts=true${local.uses_pooler ? "&prepareThreshold=0" : ""}"
-    SPRING_DATASOURCE_USERNAME = local.db.username
-    SPRING_FLYWAY_URL          = "jdbc:postgresql://${local.db.direct_host}:${local.db.port}/${local.db.cph_database}?sslmode=require"
-    DB_HOST                    = local.db.direct_host
-    DB_PORT                    = tostring(local.db.port)
-    DB_USERNAME                = local.db.username
+  # JDBC settings per service from var.databases. App traffic uses pooler_host when one is given
+  # (PgBouncer transaction mode, so prepareThreshold=0), else the direct host. Flyway always connects
+  # direct: its advisory locks need a real session.
+  cph_db = lookup(var.databases, "cph", null)
+  cph_db_env = local.cph_db == null ? {} : {
+    SPRING_DATASOURCE_URL = (local.cph_db.pooler_host == null
+      ? "jdbc:postgresql://${local.cph_db.host}:${local.cph_db.port}/${local.cph_db.name}?sslmode=require&reWriteBatchedInserts=true"
+    : "jdbc:postgresql://${local.cph_db.pooler_host}:${local.cph_db.port}/${local.cph_db.name}?sslmode=require&reWriteBatchedInserts=true&prepareThreshold=0")
+    SPRING_DATASOURCE_USERNAME = local.cph_db.username
+    SPRING_FLYWAY_URL          = "jdbc:postgresql://${local.cph_db.host}:${local.cph_db.port}/${local.cph_db.name}?sslmode=require"
+    DB_HOST                    = local.cph_db.host
+    DB_PORT                    = tostring(local.cph_db.port)
+    DB_USERNAME                = local.cph_db.username
   }
-  credit_db_env = local.db == null ? {} : {
-    CREDIT_DB_HOST     = local.db.direct_host
-    CREDIT_DB_PORT     = tostring(local.db.port)
-    CREDIT_DB_USERNAME = coalesce(local.db.credit_username, local.db.username)
-    # creditService's yml hard-codes the database name; this lets UAT choose it.
-    SPRING_DATASOURCE_URL = "jdbc:postgresql://${local.db.direct_host}:${local.db.port}/${local.db.credit_database}?sslmode=require"
+
+  credit_db = lookup(var.databases, "creditservice", null)
+  credit_db_env = local.credit_db == null ? {} : {
+    CREDIT_DB_HOST     = local.credit_db.host
+    CREDIT_DB_PORT     = tostring(local.credit_db.port)
+    CREDIT_DB_USERNAME = local.credit_db.username
+    # creditService's yml hard-codes the database name; this makes it configurable.
+    SPRING_DATASOURCE_URL = "jdbc:postgresql://${local.credit_db.host}:${local.credit_db.port}/${local.credit_db.name}?sslmode=require"
   }
 }
 
@@ -46,7 +48,7 @@ module "cph" {
   image                 = "${local.image_base}/cph:latest"
   service_account_email = google_service_account.cph_runtime.email
   port                  = 9918
-  public                = true # UAT testers use it from the browser; JWT protects the API
+  public                = true # the browser UI calls it directly; JWT protects the API
 
   cpu           = var.cph.cpu
   memory        = var.cph.memory

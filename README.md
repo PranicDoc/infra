@@ -1,115 +1,97 @@
 # PranicDoc infra
 
-**Prod is the VM** (`213.199.38.16`, docker-compose). **UAT is GCP Cloud Run** (asia-south1, scale to zero,
-Neon free Postgres). Everything runs from GitHub Actions; nothing is run on a laptop.
+One codebase for every environment. **UAT** is GCP Cloud Run (scale to zero, Neon Postgres). **Prod** is
+the VM (`213.199.38.16`, docker-compose). Everything runs from GitHub Actions.
 
 | Layer | Folder | Runs when | Touches |
 |---|---|---|---|
-| Provisioning (UAT) | `tofu/` + `tofu.yml` | PR / merge → plan; **Run workflow** (`apply`) → secret sync + apply | Cloud Run cph + creditService, Secret Manager, Artifact Registry, Cloud Scheduler, WIF, budget |
-| Configuration (prod VM) | `ansible/` + `ansible.yml` | PR / merge → lint; **Run workflow** → provision (dry run by default) | packages, Docker log rotation, `/opt/pranicdoc/bin/deploy.sh`, image prune cron |
-| Deployment | `deploy-cloudrun.yml`, `deploy-vm.yml` | called by app repos after a build | UAT image swap with auto-rollback · prod `deploy.sh` |
+| Provisioning | `tofu/` + `tofu.yml` | PR / merge → plan (`uat`); **Run workflow** (`environment`, `apply`) → secret sync + apply | Cloud Run, Secret Manager, Artifact Registry, Cloud Scheduler, WIF, budget |
+| Configuration (prod VM) | `ansible/` + `ansible.yml` | PR / merge → lint; **Run workflow** → provision (dry run by default) | packages, Docker log rotation, `deploy.sh`, image prune cron |
+| Deployment | `deploy-cloudrun.yml`, `deploy-vm.yml` | called by app repos after a build | Cloud Run image swap with auto-rollback · VM `deploy.sh` |
 
-**Ownership rules**
-- **Settings and secrets live in GitHub.** Repo variables hold settings; Environment secrets hold passwords.
-  CI turns the variables into tfvars and copies the secrets into Secret Manager.
-- **Config vs image.** Tofu owns Cloud Run *config*; CI owns the *image*. Never change Cloud Run in the console.
+## How environments work
+An environment is three things with the same name, here `uat`:
+1. **The GitHub Environment** `uat` (Settings → Environments). It holds the values, with the **same variable
+   and secret names in every environment**.
+2. **`tofu/envs/uat.tfvars`**: only sizing and feature flags, committed.
+3. **A GCP project**, prepared once with `scripts/bootstrap-gcp.sh <project> <billing-account>`.
 
-## What runs where
+The workflow takes `environment` as input and reads only that environment's values. To add a new
+environment, create those three things and add its name to the `environment` options in `tofu.yml`.
 
-| | Prod (VM) | UAT (Cloud Run) |
-|---|---|---|
-| cph | ✅ | ✅ `min_instances=0` |
-| creditService | ✅ | ✅ scale to zero |
-| pdfWorker | ✅ (polls DB every 1 s) | ❌ PDFs stay DRAFT in UAT |
-| Outbox send | async after commit | inline after commit (`APP_NOTIFICATIONS_DISPATCH=sync`) |
-| Outbox sweep (30 min) | in-process `@Scheduled` | Cloud Scheduler → `POST /cph/api/v1/internal/notifications/sweep` |
-| Database | Aiven (+ PgBouncer container) | Neon free, **direct** connections (no pooler needed) |
-| R2 bucket | `pranicdoc-pdfs` | `pranicdoc-pdfs-uat` |
+Applies are manual (**Run workflow**) because the org is on GitHub Free, where private-repo
+Environments can't require a reviewer.
 
-## One-time setup
+## Variables and secrets (same names in every environment)
 
-### 1. GCP trust (Cloud Shell, about 2 minutes)
-GitHub can't log into GCP until GCP trusts it, so this step needs a human once. Open
-console.cloud.google.com, click **>_** (Cloud Shell), upload `scripts/bootstrap-gcp.sh` and run
-`bash bootstrap-gcp.sh`. It's idempotent.
+**Environment variables**
 
-It creates the state bucket, the GitHub OIDC trust, the `github-tofu` account and the empty secret
-containers. It prints two values for step 3.
-
-### 2. Neon and R2
-- **Neon:** a project with two databases, e.g. `cph-uat` (cph) and `credit_service` (creditService). Both
-  services run Flyway, so they can't share one.
-- **R2:** create the bucket `pranicdoc-pdfs-uat`.
-
-### 3. GitHub → `PranicDoc/infra` → Settings
-**Secrets and variables → Actions → Variables** (repository):
-
-| Variable | Example |
+| Name | Meaning |
 |---|---|
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | printed by bootstrap |
-| `TOFU_SERVICE_ACCOUNT` | `github-tofu@project-62583e23-5e4b-48e7-b00.iam.gserviceaccount.com` |
-| `NEON_HOST` | `ep-muddy-boat-a1acgpgt.ap-southeast-1.aws.neon.tech` (with or without `-pooler`) |
-| `NEON_DATABASE` / `NEON_USERNAME` | `cph-uat` / `cph-uat_owner` |
-| `NEON_CREDIT_DATABASE` | `credit_service` (default) |
-| `NEON_CREDIT_USERNAME`, `NEON_PORT`, `NEON_USE_POOLER` | optional: same user, `5432`, `false` |
-| `GOOGLE_CLIENT_ID`, `R2_ENDPOINT`, `MAIL_USERNAME`, `REDIS_HOST`, `WHATSAPP_PHONE_NUMBER_ID` | |
+| `GCP_PROJECT_ID`, `GCP_PROJECT_NUMBER`, `GCP_REGION`, `GCP_BILLING_ACCOUNT`, `TF_STATE_BUCKET`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `TOFU_SERVICE_ACCOUNT` | printed by `bootstrap-gcp.sh` |
+| `CPH_DB_HOST`, `CPH_DB_NAME`, `CPH_DB_USERNAME` | cph's database (direct host) |
+| `CPH_DB_PORT`, `CPH_DB_POOLER_HOST` | optional: port (default 5432); PgBouncer host for app traffic (Flyway stays direct) |
+| `CREDIT_DB_HOST`, `CREDIT_DB_NAME`, `CREDIT_DB_USERNAME`, `CREDIT_DB_PORT`, `CREDIT_DB_POOLER_HOST` | creditService's database. It must be a different database from cph's: each runs its own Flyway. |
+| `GOOGLE_CLIENT_ID`, `R2_ENDPOINT`, `MAIL_USERNAME`, `REDIS_HOST`, `WHATSAPP_PHONE_NUMBER_ID` | app settings |
 
-**Environments → `infra-uat`** secrets (set 2026-10-18; the org is on GitHub Free, so Environments have no reviewer gate. Applies and prod provisioning are manual **Run workflow** instead):
+**Environment secrets**: copied into that project's Secret Manager by the apply job. Unset secrets
+keep their current value.
 
-| Secret | Goes to Secret Manager |
+| GitHub secret | Secret Manager |
 |---|---|
-| `NEON_PASSWORD` | `db-password` (and `credit-db-password` unless `NEON_CREDIT_PASSWORD` is set) |
-| `UAT_JWT_SECRET`, `UAT_ENCRYPTION_KEY` | `jwt-secret`, `encryption-key`. **New values; don't reuse prod's.** |
-| `UAT_INTERNAL_API_KEY` | `internal-api-key` (any long random string) |
+| `CPH_DB_PASSWORD` | `db-password` |
+| `CREDIT_DB_PASSWORD` | `credit-db-password` |
+| `JWT_SECRET`, `ENCRYPTION_KEY`, `INTERNAL_API_KEY` | `jwt-secret`, `encryption-key`, `internal-api-key`. **Each environment gets its own values.** |
 | `GOOGLE_CLIENT_SECRET`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`, `CREDIT_API_KEY`, `MAIL_PASSWORD`, `REDIS_PASSWORD` | same names, kebab-case |
 
-Unset secrets are skipped, so the current value stays.
+**Prod (VM) environment:** `VM_HOST`, `VM_SSH_USER`, `VM_SSH_KEY`. These are for `ansible.yml` and
+`deploy-vm.yml`; the key is an SSH **key**.
 
-Also:
-- **Environments:** `infra-uat`, `cloudrun-uat` and `vm-prod` exist (created 2026-10-18).
-- **Settings → Actions → General → Access:** *accessible from repositories in the organization*.
-- **Org-level secrets:** `VM_HOST`, `VM_SSH_USER`, `VM_SSH_KEY` (an SSH **key**; the old workflows use `VM_PASSWORD`).
+## First run of an environment
+1. **Cloud Shell** (console.cloud.google.com → **>_**): run
+   `bash bootstrap-gcp.sh <project-id> <billing-account-id>`. Put the 7 variables it prints into the GitHub
+   Environment.
+2. Fill in the remaining variables and secrets above.
+3. **Actions → OpenTofu → Run workflow:** pick the environment, run once without **apply** to see the plan,
+   then again with **apply**.
+4. Then:
+   - set `enable_outbox_sweep = true` in `envs/<env>.tfvars` and apply again;
+   - add `<cph URL>/cph/login/oauth2/code/google` as an OAuth redirect URI.
 
-### 4. Run it
-**Actions → OpenTofu — GCP UAT → Run workflow**, tick **apply**. The run plans, syncs secrets into Secret
-Manager, then applies that plan. Merges to `main` only plan, so check the plan before you run with **apply**.
+## UAT specifics
+| | Prod (VM) | UAT (Cloud Run) |
+|---|---|---|
+| cph / creditService | ✅ | ✅ scale to zero |
+| pdfWorker | ✅ (polls DB every 1 s) | ❌ PDFs stay DRAFT |
+| Outbox send / sweep | async · in-process `@Scheduled` | inline · Cloud Scheduler every 30 min |
+| Database | Aiven (+ PgBouncer container) | Neon, direct connections |
+| R2 bucket | `pranicdoc-pdfs` | `pranicdoc-pdfs-uat` |
 
-### 5. Afterwards
-- **Outbox sweep:** set `enable_outbox_sweep = true` in `tofu/uat.tfvars` and merge.
-- **Google OAuth:** add `<cph Cloud Run URL>/cph/login/oauth2/code/google` as a redirect URI.
-- **App repos:** in cph and credit-service, set `GCP_SERVICE_ACCOUNT` to `github-deployer@...` and
-  `GCP_WORKLOAD_IDENTITY_PROVIDER`.
-- **After moving the project into a Cloud Identity org:** override `iam.allowedPolicyMemberDomains` on this
-  project, or the `allUsers` invoker on cph and creditService is blocked.
-
-## Day-2
-
-| Want | Do |
-|---|---|
-| Rotate a password | update the GitHub secret → **Run workflow** with `secrets_only` → redeploy the service |
-| Change Neon host/db/user | update the `NEON_*` variable → **Run workflow** |
-| No cold starts on UAT | `uat.tfvars`: `cph.min_instances = 1` (about ₹1,300/mo) |
-| More DB connections | `NEON_USE_POOLER = true` (cph via Neon's PgBouncer; Flyway stays direct) |
-| PDFs in UAT | pdfWorker needs the poller-removal change first; then `enable_pdfworker` + `enable_cloud_tasks` |
-| Rebuild prod VM | fresh Ubuntu → copy `.env` → run the Ansible workflow |
+If the project moves into a Cloud Identity org, override `iam.allowedPolicyMemberDomains` on it.
+Otherwise the `allUsers` invoker on cph and creditService is blocked.
 
 ## Wiring app repos
+In each app repo, create a GitHub Environment with the same name (`uat`) and the variables
+`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`
+(`github-deployer@<project>.iam.gserviceaccount.com`). Then:
 
 ```yaml
-deploy-uat:                       # after build pushes to Artifact Registry
+deploy:
   needs: build
   permissions: { contents: read, id-token: write }
   uses: PranicDoc/infra/.github/workflows/deploy-cloudrun.yml@main
   with:
-    service: cph                  # creditservice: health_path /credits/actuator/health
-    image: asia-south1-docker.pkg.dev/project-62583e23-5e4b-48e7-b00/all-in-one/cph:sha-<short sha from build>
+    environment: uat
+    service: cph                    # creditservice: health_path /credits/actuator/health
+    image_tag: ${{ needs.build.outputs.image-tag }}
     health_path: /cph/actuator/health
-    workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-    service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-
-deploy-prod:
-  needs: build
-  uses: PranicDoc/infra/.github/workflows/deploy-vm.yml@main
-  with: { services: cph }
-  secrets: inherit
 ```
+
+## Day-2
+| Want | Do |
+|---|---|
+| Rotate a password | update the Environment secret → **Run workflow** with `secrets_only` → redeploy the service |
+| Change a DB host/name/user | update the Environment variable → **Run workflow** with `apply` |
+| No cold starts | `envs/<env>.tfvars`: `cph.min_instances = 1` (about ₹1,300/mo) |
+| PDFs on Cloud Run | pdfWorker needs the poller-removal change first; then `enable_pdfworker` + `enable_cloud_tasks` |
+| Rebuild prod VM | fresh Ubuntu → copy `.env` → run the Ansible workflow |

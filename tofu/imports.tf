@@ -1,35 +1,7 @@
-# Adopt what exists outside tofu: resources created by hand in Jul/Aug 2026 and on 2026-10-16, plus
-# everything scripts/bootstrap-gcp.sh creates. Import blocks are no-ops once the resource is in
+# Adopt resources that exist before tofu runs. Import blocks are no-ops once the resource is in
 # state, so they can stay.
 
-import {
-  to = google_service_account.cph_runtime
-  id = "projects/${var.project_id}/serviceAccounts/cph-cloudrun-runtime@${var.project_id}.iam.gserviceaccount.com"
-}
-
-import {
-  to = google_artifact_registry_repository.images
-  id = "projects/${var.project_id}/locations/${var.region}/repositories/${var.artifact_repo}"
-}
-
-# All app secrets: the original nine, plus the two bootstrap-gcp.sh creates (empty).
-import {
-  for_each = local.secret_names
-  to       = google_secret_manager_secret.app[each.value]
-  id       = "projects/${var.project_id}/secrets/${each.value}"
-}
-
-import {
-  to = module.cph.google_cloud_run_v2_service.this
-  id = "projects/${var.project_id}/locations/${var.region}/services/cph"
-}
-
-import {
-  to = google_billing_budget.monthly
-  id = "billingAccounts/${var.billing_account_id}/budgets/cb22e9a9-612f-4a47-aa08-a620c86dd598"
-}
-
-# ─── Created by scripts/bootstrap-gcp.sh ─────────────────────────────────────
+# ─── Always: created by scripts/bootstrap-gcp.sh in every environment ────────
 
 import {
   to = google_service_account.tofu
@@ -44,4 +16,36 @@ import {
 import {
   to = google_iam_workload_identity_pool_provider.github
   id = "projects/${var.project_id}/locations/global/workloadIdentityPools/github/providers/github-oidc"
+}
+
+import {
+  for_each = local.secret_names
+  to       = google_secret_manager_secret.app[each.value]
+  id       = "projects/${var.project_id}/secrets/${each.value}"
+}
+
+# ─── Only where things were built by hand first (adopt_existing = true) ──────
+
+import {
+  for_each = var.adopt_existing ? toset(["cph-cloudrun-runtime"]) : toset([])
+  to       = google_service_account.cph_runtime
+  id       = "projects/${var.project_id}/serviceAccounts/${each.value}@${var.project_id}.iam.gserviceaccount.com"
+}
+
+import {
+  for_each = var.adopt_existing ? toset([var.artifact_repo]) : toset([])
+  to       = google_artifact_registry_repository.images
+  id       = "projects/${var.project_id}/locations/${var.region}/repositories/${each.value}"
+}
+
+import {
+  for_each = var.adopt_existing ? toset(["cph"]) : toset([])
+  to       = module.cph.google_cloud_run_v2_service.this
+  id       = "projects/${var.project_id}/locations/${var.region}/services/${each.value}"
+}
+
+import {
+  for_each = var.existing_budget_id == null ? toset([]) : toset([var.existing_budget_id])
+  to       = google_billing_budget.monthly
+  id       = "billingAccounts/${var.billing_account_id}/budgets/${each.value}"
 }

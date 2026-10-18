@@ -1,9 +1,14 @@
-# This GCP project is UAT (Cloud Run, scale to zero). Prod runs on the VM — see ansible/.
+# UAT: Cloud Run, scale to zero. Prod runs on the VM — see ansible/.
+#
+# Only sizing and feature flags live here. Project, region, billing account, state bucket and
+# databases come from the GitHub Environment `uat` (same variable names in every environment).
+# A new environment = a new envs/<name>.tfvars + a GitHub Environment <name> + bootstrap-gcp.sh.
 
-project_id         = "project-62583e23-5e4b-48e7-b00"
-project_number     = "567095892493"
-region             = "asia-south1"
-billing_account_id = "01DE97-95AA80-8044CD" # TODO: new company billing account
+environment = "uat"
+
+# This project had cph, its runtime SA, Artifact Registry and a budget before tofu managed it.
+adopt_existing     = true
+existing_budget_id = "cb22e9a9-612f-4a47-aa08-a620c86dd598"
 
 budget_amount_inr = 2000
 

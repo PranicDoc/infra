@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copies GitHub secrets into GCP Secret Manager (the app reads them from there).
+# Copies the GitHub Environment's secrets into that environment's GCP Secret Manager.
 #
 # For each mapping below: if the GitHub secret is set and differs from the secret's latest
 # version, add a new version and destroy the older ones (keeps us inside the 6 free versions).
@@ -39,12 +39,12 @@ sync() {
   done
 }
 
-# Secret Manager name    GitHub secret (Environment: infra-uat)
-sync db-password          "${NEON_PASSWORD:-}"
-sync credit-db-password   "${NEON_CREDIT_PASSWORD:-${NEON_PASSWORD:-}}"
-sync jwt-secret           "${UAT_JWT_SECRET:-}"
-sync encryption-key       "${UAT_ENCRYPTION_KEY:-}"
-sync internal-api-key     "${UAT_INTERNAL_API_KEY:-}"
+# Secret Manager name    GitHub Environment secret (same names in every environment)
+sync db-password          "${CPH_DB_PASSWORD:-}"
+sync credit-db-password   "${CREDIT_DB_PASSWORD:-}"
+sync jwt-secret           "${JWT_SECRET:-}"
+sync encryption-key       "${ENCRYPTION_KEY:-}"
+sync internal-api-key     "${INTERNAL_API_KEY:-}"
 sync google-client-secret "${GOOGLE_CLIENT_SECRET:-}"
 sync r2-access-key        "${R2_ACCESS_KEY:-}"
 sync r2-secret-key        "${R2_SECRET_KEY:-}"

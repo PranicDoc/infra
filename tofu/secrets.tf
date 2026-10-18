@@ -1,5 +1,6 @@
 # Tofu owns the secret *containers* and who can read them — never the values.
-# Values: GitHub Environment `infra-uat` secrets, synced by the tofu workflow (scripts/ci/sync-secrets.sh).
+# Values: secrets of the GitHub Environment being applied, synced by the tofu workflow
+# (scripts/ci/sync-secrets.sh) — same secret names in every environment.
 
 locals {
   # All exist before tofu runs (hand-made in Jul/Aug 2026, or scripts/bootstrap-gcp.sh) and are adopted

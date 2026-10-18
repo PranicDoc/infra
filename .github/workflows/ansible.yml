@@ -46,7 +46,7 @@ jobs:
     needs: lint
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    environment: vm-prod
+    environment: prod
     steps:
       - uses: actions/checkout@v4
       - run: pip install ansible-core==2.17.*

@@ -1,67 +1,57 @@
 #!/usr/bin/env bash
-# Builds tofu/ci.auto.tfvars.json from GitHub Actions variables (non-secret settings).
-# Passwords never go here — they're synced straight into Secret Manager by sync-secrets.sh.
+# Builds tofu/ci.auto.tfvars.json from the GitHub Environment's variables (non-secret settings).
+# Same variable names in every environment. Passwords never go here — sync-secrets.sh puts them
+# straight into Secret Manager.
 #
-# Inputs (env, from repo Variables):
-#   NEON_HOST             Neon host, direct or pooled (either works)        required for a DB
-#   NEON_PORT             default 5432
-#   NEON_DATABASE         cph database, e.g. cph-uat
-#   NEON_USERNAME         role, e.g. cph-uat_owner
-#   NEON_CREDIT_DATABASE  default credit_service
-#   NEON_CREDIT_USERNAME  default NEON_USERNAME
-#   NEON_USE_POOLER       "true" -> cph app traffic via Neon's pooler (default: direct)
-#   GOOGLE_CLIENT_ID, R2_ENDPOINT, MAIL_USERNAME, WHATSAPP_PHONE_NUMBER_ID, REDIS_HOST
+# Per service, prefix CPH_ (cph) or CREDIT_ (creditService):
+#   <P>_DB_HOST         direct host                                   required to configure that DB
+#   <P>_DB_NAME         database name                                 required with HOST
+#   <P>_DB_USERNAME     role                                          required with HOST
+#   <P>_DB_PORT         default 5432
+#   <P>_DB_POOLER_HOST  optional PgBouncer host for app traffic (Flyway stays on HOST)
+# Plus: GOOGLE_CLIENT_ID, R2_ENDPOINT, MAIL_USERNAME, WHATSAPP_PHONE_NUMBER_ID, REDIS_HOST
 set -euo pipefail
 out="${1:-tofu/ci.auto.tfvars.json}"
 
-if [ -n "${NEON_HOST:-}" ]; then
-  for v in NEON_DATABASE NEON_USERNAME; do
-    [ -n "${!v:-}" ] || { echo "::error::$v must be set when NEON_HOST is set"; exit 1; }
-  done
-  [ "${NEON_CREDIT_DATABASE:-credit_service}" != "$NEON_DATABASE" ] || {
-    echo "::error::NEON_CREDIT_DATABASE must differ from NEON_DATABASE (each service runs its own Flyway)"; exit 1; }
-else
-  echo "::warning::NEON_HOST not set — UAT will be planned without database settings"
+for p in CPH CREDIT; do
+  host_var="${p}_DB_HOST"
+  if [ -n "${!host_var:-}" ]; then
+    for v in "${p}_DB_NAME" "${p}_DB_USERNAME"; do
+      [ -n "${!v:-}" ] || { echo "::error::$v must be set when $host_var is set"; exit 1; }
+    done
+  else
+    echo "::warning::$host_var not set — that service is planned without database settings"
+  fi
+done
+
+if [ -n "${CPH_DB_HOST:-}" ] && [ "${CPH_DB_HOST:-}" = "${CREDIT_DB_HOST:-}" ] \
+   && [ "${CPH_DB_NAME:-}" = "${CREDIT_DB_NAME:-}" ]; then
+  echo "::error::cph and creditService point at the same database — each runs its own Flyway, so they need separate databases"
+  exit 1
 fi
 
-jq -n \
-  --arg host "${NEON_HOST:-}" \
-  --arg port "${NEON_PORT:-5432}" \
-  --arg db "${NEON_DATABASE:-}" \
-  --arg user "${NEON_USERNAME:-}" \
-  --arg cdb "${NEON_CREDIT_DATABASE:-credit_service}" \
-  --arg cuser "${NEON_CREDIT_USERNAME:-${NEON_USERNAME:-}}" \
-  --arg pooler "${NEON_USE_POOLER:-false}" \
-  --arg gcid "${GOOGLE_CLIENT_ID:-}" \
-  --arg r2 "${R2_ENDPOINT:-}" \
-  --arg mailu "${MAIL_USERNAME:-}" \
-  --arg wa "${WHATSAPP_PHONE_NUMBER_ID:-}" \
-  --arg redis "${REDIS_HOST:-}" '
-  # Neon pooled endpoint = compute endpoint id + "-pooler"
-  def direct: sub("^(?<ep>ep-[^.]+?)-pooler\\."; "\(.ep).");
-  def pooled: direct | sub("^(?<ep>ep-[^.]+?)\\."; "\(.ep)-pooler.");
-  def nonempty: with_entries(select(.value != ""));
+jq -n '
+  def blank_to_null: if . == null or . == "" then null else . end;
+  def db($p):
+    (env[$p + "_DB_HOST"] | blank_to_null) as $host
+    | if $host == null then null else {
+        host: $host,
+        port: ((env[$p + "_DB_PORT"] | blank_to_null) // "5432" | tonumber),
+        name: env[$p + "_DB_NAME"],
+        username: env[$p + "_DB_USERNAME"],
+        pooler_host: (env[$p + "_DB_POOLER_HOST"] | blank_to_null)
+      } end;
   {
+    databases: ({ cph: db("CPH"), creditservice: db("CREDIT") } | with_entries(select(.value != null))),
     cph_env_private: ({
-      GOOGLE_CLIENT_ID: $gcid,
-      R2_ENDPOINT: $r2,
-      MAIL_USERNAME: $mailu,
-      WHATSAPP_PHONE_NUMBER_ID: $wa,
-      SPRING_DATA_REDIS_HOST: $redis
-    } | nonempty)
+      GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
+      R2_ENDPOINT: env.R2_ENDPOINT,
+      MAIL_USERNAME: env.MAIL_USERNAME,
+      WHATSAPP_PHONE_NUMBER_ID: env.WHATSAPP_PHONE_NUMBER_ID,
+      SPRING_DATA_REDIS_HOST: env.REDIS_HOST
+    } | with_entries(select((.value | blank_to_null) != null)))
   }
-  + (if $host == "" then {} else {
-      uat_db: {
-        pooled_host: (if $pooler == "true" then ($host | pooled) else ($host | direct) end),
-        direct_host: ($host | direct),
-        port: ($port | tonumber),
-        username: $user,
-        cph_database: $db,
-        credit_username: $cuser,
-        credit_database: $cdb
-      }
-    } end)
 ' > "$out"
 
 echo "Wrote $out:"
-jq '.uat_db // "no uat_db"' "$out"
+jq '.databases' "$out"
