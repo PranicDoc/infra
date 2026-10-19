@@ -215,3 +215,44 @@ Same shape, default branch `master`. VM service `creditservice`, Cloud Run servi
 ### Task 12: Docs
 
 - [ ] Update `infra/README.md` ("Releasing and deploying": run Release, then Deploy; rollback = Deploy an older tag; the Flyway limitation; target/environment pairs) and add a line to `infra/PROGRESS.md`. Commit.
+
+---
+
+## Phase 3: one chakra scan sheet per session (pdfWorker)
+
+Tracked in Notion: "PDF: one chakra scan sheet per session instead of overwriting a single sheet". Agreed 2026-10-19. Independent of Phases 1–2; ship it through the new Release → Deploy flow once that exists.
+
+### Task 13: Duplicate the scan sheet per session, with a session label
+
+**Problem:** `CaseSnapshotMapper.mapSessionData` writes every session's PRE/POST readings into the same `SCAN_*` fields on template page index 4, so only the last session's values survive.
+
+**Design (decided):**
+- Follow `PdfRendererServiceImpl.duplicateFeedbackPages`. The number of scan sheets equals `sessions.size()`; each sheet holds one session's PRE and POST scan. Add `sessions.size() − 1` clean copies of template page index 4, imported from a fresh template load, inserted directly after the original scan page.
+- Session order is the snapshot's session list order (cph sends them sorted by session number). Session *i* (0-based) is drawn on scan page `4 + i`.
+- 0 or 1 sessions: no extra pages; output identical to today.
+- No cap on sessions.
+- Each scan sheet gets a label **`Session <n> – <dd/MM/yyyy>`**: `n` = `sessionNumber()`, or `i + 1` when null (same fallback as the feedback rows); date = `sessionDate()` in the renderer's existing `DATE_FMT`, omitted with its dash when null. Position: top-right, right edge x≈535, y≈812 (free space above the page title at y=792), font 9. Check it visually on a generated PDF and adjust once.
+- Insert and draw the scan copies **after** `renderFields` and `renderFeedbackPages`, so the existing feedback page-index shifting is untouched. Later pages simply move back by the number of inserted sheets.
+
+**Files:**
+- Modify: `pdfWorker/src/main/java/com/pranicdoc/pdfWorker/template/CaseSnapshotMapper.java`
+  - Add `public static Map<PdfTemplateField, String> scanFields(SessionSnapshot session)`: the `SCAN_*` values for one session's PRE/POST readings (reuse the `REGISTRY`/`ChakraPdfKeys` lookup now inline in `mapSessionData`).
+  - `mapSessionData` no longer writes `SCAN_*` fields; scan rendering moves to the renderer.
+- Modify: `pdfWorker/src/main/java/com/pranicdoc/pdfWorker/service/impl/PdfRendererServiceImpl.java`
+  - Add `private void renderScanSheets(PDDocument document, PDFont font, List<SessionSnapshot> sessions, byte[] templateBytes)`: inserts the copies, draws each session's `scanFields` with the existing `renderField`, and draws the label.
+  - Call it from `render(...)` after `renderFeedbackPages`.
+- Test: `pdfWorker/src/test/java/com/pranicdoc/pdfWorker/template/CaseSnapshotMapperTest.java`, `pdfWorker/src/test/java/com/pranicdoc/pdfWorker/service/impl/PdfRendererServiceImplTest.java` (create if absent; the renderer loads the real `generatePdf/template.pdf`).
+
+- [ ] **Step 1: Write the failing tests**
+  - `scanFields_onlyThatSessionsReadings`: two sessions with different Crown readings. `scanFields(session2)` returns session 2's values for `SCAN_CROWN_ENERGY_BEFORE` / `..._AFTER`, and `scanFields(session1)` returns session 1's.
+  - `toFieldMap_hasNoScanFields`: `toFieldMap(fullSnapshot())` contains no key starting with `SCAN_`.
+  - Renderer `threeSessions_addTwoScanSheets`: page count = template pages + 2. Extracted text of pages 4, 5 and 6 contains `Session 1`, `Session 2` and `Session 3` respectively, and page 7 is the first feedback page (contains the feedback header text).
+  - Renderer `oneSession_pageCountUnchanged`: page count = template page count, and page 4 contains `Session 1`.
+  - Renderer `sessionWithoutDate_labelHasNoDate`: label text is exactly `Session 1`.
+  - Renderer `scansAndFeedbackOverflow_together`: 2 sessions and 6 symptoms. Page count = template + 1 (scan) + 1 (feedback overflow), and the protocol page text is still found on the expected index.
+- [ ] **Step 2:** Run `gradlew.bat test --tests "*CaseSnapshotMapperTest" --tests "*PdfRendererServiceImplTest"`. Expected: FAIL.
+- [ ] **Step 3:** Implement `scanFields` and remove `SCAN_*` writes from `mapSessionData`.
+- [ ] **Step 4:** Implement `renderScanSheets` and call it.
+- [ ] **Step 5:** Run the full pdfWorker suite. Expected: 0 failures.
+- [ ] **Step 6:** Generate a PDF for a 3-session case locally and check the three scan sheets and the label position by eye (the user tests locally before push).
+- [ ] **Step 7:** Commit `feat(pdf): one chakra scan sheet per session, labelled with session number and date`. Open a PR to pdfWorker `main`. CI must be green.
