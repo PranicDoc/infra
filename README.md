@@ -72,22 +72,32 @@ that touches the VM is Ansible (`.github/actions/ansible-vm`), so the tooling is
 If the project moves into a Cloud Identity org, override `iam.allowedPolicyMemberDomains` on it.
 Otherwise the `allUsers` invoker on cph and creditService is blocked.
 
-## Wiring app repos
-In each app repo, create a GitHub Environment with the same name (`uat`) and the variables
-`GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`
-(`github-deployer@<project>.iam.gserviceaccount.com`). Then:
+## Releasing and deploying
+Every app repo (cph, pdfWorker, credit-service) has the same three workflows; the logic lives here.
 
-```yaml
-deploy:
-  needs: build
-  permissions: { contents: read, id-token: write }
-  uses: PranicDoc/infra/.github/workflows/deploy-cloudrun.yml@main
-  with:
-    environment: uat
-    service: cph                    # creditservice: health_path /credits/actuator/health
-    image_tag: ${{ needs.build.outputs.image-tag }}
-    health_path: /cph/actuator/health
-```
+| Workflow (app repo) | When | What it does |
+|---|---|---|
+| **CI** | every push to the default branch and every PR (automatic) | `ci-gradle.yml` / `ci-node.yml`: build + tests. Pushes nothing. |
+| **Release** | you run it | `release.yml`: needs green CI on HEAD; tags it with the next `vX.Y.Z` (patch / minor / major) and publishes a GitHub Release. |
+| **Deploy** | you run it | `resolve-release.yml` → `build-image.yml` → `deploy-vm.yml` / `deploy-cloudrun.yml`. |
+
+Deploy inputs: **tag** (`vX.Y.Z`, or empty = the default branch's latest commit), **target** (`vm` | `cloudrun`),
+**environment** (`prod` | `uat`; for now `vm` must be `prod` and `cloudrun` must be `uat`), and in cph
+**components** (`backend` | `ui` | `both`). It builds `<image>:<version>` at deploy time (an existing version
+is reused, never rebuilt), then:
+- **prod** waits for an `approve` comment on the issue it opens; `uat` doesn't.
+- **VM:** `ansible/playbooks/deploy.yml` pins the services in `/opt/pranicdoc/docker-compose.override.yml`
+  (written from `deployed-versions.yml`; other services keep their pins), pulls with the run's own token
+  in a throwaway Docker config, restarts only those services and waits for health. If one stays
+  unhealthy it puts back the previous images and still fails. One deploy at a time (`.deploy.lock`;
+  if a killed run left it behind, remove that directory on the VM).
+- **Cloud Run:** swaps the image and rolls traffic back if the health check fails (needs the GCP bootstrap).
+
+**Rollback** = run Deploy with an older tag. Not across a Flyway migration: older cph code refuses a newer
+schema, so a backend rollback only works between releases that didn't add a migration.
+
+Cloud Run needs, in each app repo, a GitHub Environment `uat` with `GCP_PROJECT_ID`, `GCP_REGION`,
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT` (`github-deployer@<project>.iam.gserviceaccount.com`).
 
 ## Day-2
 | Want | Do |
