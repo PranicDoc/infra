@@ -1,0 +1,26 @@
+name: Next version
+description: Next SemVer tag from the latest one (none = v0.0.0) and a bump (patch | minor | major)
+
+inputs:
+  latest:
+    description: Latest vX.Y.Z tag, or empty when the repo has none
+    required: false
+    default: ""
+  bump:
+    description: patch, minor or major
+    required: true
+
+outputs:
+  version:
+    description: The next tag, e.g. v1.4.3
+    value: ${{ steps.next.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: next
+      shell: bash
+      env:
+        LATEST: ${{ inputs.latest }}
+        BUMP: ${{ inputs.bump }}
+      run: echo "version=$(bash "$GITHUB_ACTION_PATH/next-version.sh" "$LATEST" "$BUMP")" >> "$GITHUB_OUTPUT"

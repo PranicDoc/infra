@@ -1,0 +1,6 @@
+---
+# Release the lock taken by lock.yml. Input: lock_path
+- name: Release the deploy lock
+  ansible.builtin.file:
+    path: "{{ lock_path }}"
+    state: absent

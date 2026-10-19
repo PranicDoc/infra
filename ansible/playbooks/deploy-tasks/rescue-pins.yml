@@ -1,0 +1,10 @@
+---
+# What the rescue puts back. If the services were already restarted on the new version, roll them
+# back to the previous images and restart. If the deploy failed before that (login or pull), nothing
+# changed on the running containers: restore the pin files exactly and restart nothing.
+# Inputs: restarted, deployed_versions, rollback_versions
+# Outputs: restore_pins, restart_previous
+- name: Rescue plan
+  ansible.builtin.set_fact:
+    restore_pins: "{{ rollback_versions if restarted | bool else deployed_versions }}"
+    restart_previous: "{{ restarted | bool }}"

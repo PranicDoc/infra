@@ -1,0 +1,16 @@
+---
+# Record which image each service runs and pin compose to it.
+# Input: pins (service -> image)
+- name: Record deployed versions
+  ansible.builtin.copy:
+    dest: "{{ versions_file }}"
+    content: "{{ pins | to_nice_yaml }}"
+    mode: "0644"
+
+- name: Pin compose to those images
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../roles/app/templates/docker-compose.override.yml.j2"
+    dest: "{{ override_file }}"
+    mode: "0644"
+  vars:
+    pinned_images: "{{ pins }}"

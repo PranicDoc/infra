@@ -1,75 +1,201 @@
 ---
-# Ship new versions: pull the services' current images, restart only those services, and wait for
-# their container healthchecks. Run by .github/workflows/deploy-vm.yml after approval.
+# Ship an exact version: pin the services to <repo>:<version> (docker-compose.override.yml, written
+# from deployed-versions.yml), pull, restart only those services and wait for their healthchecks.
+# If one stays unhealthy, put back what ran before, wait for it, and still fail the run.
+# Run by .github/workflows/deploy-vm.yml after approval.
 #
-#   ansible-playbook playbooks/deploy.yml -e '{"services": ["cph", "ui"]}'
+#   ansible-playbook playbooks/deploy.yml \
+#     -e '{"services": ["cph", "ui"], "version": "v1.4.0", "registry_user": "...", "registry_token": "..."}'
+#
+# Without a version (legacy callers until they move to Release/Deploy: old build-and-push,
+# rollback-cph, deploy-branch) the services are unpinned and pulled as before, using the VM's own
+# saved registry login.
+#
+# With a version, the registry login lives in a throwaway DOCKER_CONFIG directory, so the VM's
+# saved login (which legacy deploys and manual pulls rely on) is never touched.
 - name: Deploy services on the prod VM
   hosts: prod
   gather_facts: false
   vars:
     services: []
+    version: ""
+    registry: ghcr.io
+    registry_user: ""
+    registry_token: ""
     health_retries: 30 # x 10 s = ~5 min per service
+    versions_file: "{{ app_dir }}/deployed-versions.yml"
+    override_file: "{{ app_dir }}/docker-compose.override.yml"
+    lock_path: "{{ app_dir }}/.deploy.lock"
+    restarted: false
   tasks:
-    - name: Services to deploy were given
+    - name: Services were given
       ansible.builtin.assert:
-        that: services | length > 0
-        fail_msg: 'Pass the compose services, e.g. -e ''{"services": ["cph"]}'''
+        that:
+          - services | length > 0
+          - services | difference(service_images.keys()) | length == 0
+        fail_msg: >-
+          Pass -e '{"services": ["cph"], "version": "v1.4.0"}'; services must be among
+          {{ service_images.keys() | list }}
 
-    - name: Deploy and verify
+    - name: One deploy at a time
+      ansible.builtin.include_tasks: deploy-tasks/lock.yml
+
+    - name: Deploy, holding the lock
       block:
-        - name: Pull images
-          ansible.builtin.command:
-            cmd: docker compose pull {{ services | join(' ') }}
-            chdir: "{{ app_dir }}"
-          changed_when: true
+        - name: Never overwrite an override we didn't write
+          ansible.builtin.include_tasks: deploy-tasks/check-override.yml
+          vars:
+            override_path: "{{ override_file }}"
 
-        - name: Restart only these services
-          ansible.builtin.command:
-            cmd: docker compose up -d --no-deps {{ services | join(' ') }}
-            chdir: "{{ app_dir }}"
-          changed_when: true
+        - name: Current pins file
+          ansible.builtin.stat:
+            path: "{{ versions_file }}"
+          register: versions_stat
 
-        - name: Container ids
-          ansible.builtin.command:
-            cmd: docker compose ps -q {{ item }}
-            chdir: "{{ app_dir }}"
-          loop: "{{ services }}"
-          register: containers
-          changed_when: false
-          failed_when: containers.stdout | length == 0
+        - name: Read current pins
+          when: versions_stat.stat.exists
+          ansible.builtin.slurp:
+            src: "{{ versions_file }}"
+          register: versions_raw
 
-        # "none" = the service defines no healthcheck; running is good enough then.
-        - name: Wait until healthy
-          ansible.builtin.command:
+        - name: Current pins
+          ansible.builtin.set_fact:
+            deployed_versions: "{{ (versions_raw.content | b64decode | from_yaml) if versions_stat.stat.exists else {} }}"
+
+        # Repo digest of the image each container runs now — the rollback target when a service has
+        # no pin yet (first versioned deploy). A service that isn't running yields nothing.
+        - name: Image each service runs now
+          ansible.builtin.shell:
             cmd: >-
-              docker inspect -f
-              '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{% endraw %}'
-              {{ item.stdout }}
-          loop: "{{ containers.results }}"
-          loop_control:
-            label: "{{ item.item }}"
-          register: health
-          until: health.stdout in ['healthy', 'none']
-          retries: "{{ health_retries }}"
-          delay: 10
-          changed_when: false
-
-      rescue:
-        - name: Logs of the services that failed
-          ansible.builtin.command:
-            cmd: docker compose logs --tail=80 {{ services | join(' ') }}
+              set -o pipefail;
+              docker image inspect -f '{% raw %}{{index .RepoDigests 0}}{% endraw %}'
+              "$(docker inspect -f '{% raw %}{{.Image}}{% endraw %}' "$(docker compose ps -q {{ item }})")"
             chdir: "{{ app_dir }}"
-          register: failure_logs
+            executable: /bin/bash
+          loop: "{{ services }}"
+          register: running
           changed_when: false
           failed_when: false
 
-        - name: Show logs
-          ansible.builtin.debug:
-            var: failure_logs.stdout_lines
+        - name: Running digests
+          vars:
+            found: "{{ running.results | selectattr('rc', 'eq', 0) | selectattr('stdout', 'search', '@sha256:') | list }}"
+          ansible.builtin.set_fact:
+            running_digests: "{{ dict(found | map(attribute='item') | zip(found | map(attribute='stdout'))) }}"
 
-        - name: Fail the deploy
-          ansible.builtin.fail:
-            msg: "Deploy of {{ services | join(', ') }} did not become healthy — see the logs above."
+        - name: What to roll back to
+          ansible.builtin.include_tasks: deploy-tasks/rollback-refs.yml
+
+        - name: Throwaway registry config (versioned deploys)
+          when: version | length > 0
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: docker-config
+          register: docker_config_dir
+
+        - name: Docker environment for registry access
+          ansible.builtin.set_fact:
+            docker_env: "{{ {'DOCKER_CONFIG': docker_config_dir.path} if version | length > 0 else {} }}"
+
+        - name: Deploy and verify
+          block:
+            - name: Log in to the registry
+              when: version | length > 0 and registry_token | length > 0
+              ansible.builtin.command:
+                cmd: docker login {{ registry }} -u {{ registry_user }} --password-stdin
+                stdin: "{{ registry_token }}"
+              environment: "{{ docker_env }}"
+              no_log: true
+              changed_when: false
+
+            - name: Work out the new pins
+              ansible.builtin.include_tasks: deploy-tasks/new-pins.yml
+
+            - name: Pin the new version
+              ansible.builtin.include_tasks: deploy-tasks/write-pins.yml
+              vars:
+                pins: "{{ new_pins }}"
+
+            - name: Pull images
+              ansible.builtin.command:
+                cmd: docker compose pull {{ services | join(' ') }}
+                chdir: "{{ app_dir }}"
+              environment: "{{ docker_env }}"
+              changed_when: true
+
+            - name: Restart only these services
+              ansible.builtin.command:
+                cmd: docker compose up -d --no-deps {{ services | join(' ') }}
+                chdir: "{{ app_dir }}"
+              environment: "{{ docker_env }}"
+              changed_when: true
+
+            - name: Services were restarted on the new version
+              ansible.builtin.set_fact:
+                restarted: true
+
+            - name: Wait for the new version
+              ansible.builtin.include_tasks: deploy-tasks/wait-healthy.yml
+              vars:
+                wait_services: "{{ services }}"
+
+          rescue:
+            - name: Logs of the services that failed
+              when: restarted | bool
+              ansible.builtin.command:
+                cmd: docker compose logs --tail=80 {{ services | join(' ') }}
+                chdir: "{{ app_dir }}"
+              register: failure_logs
+              changed_when: false
+              failed_when: false
+
+            - name: Show logs
+              when: restarted | bool
+              ansible.builtin.debug:
+                var: failure_logs.stdout_lines
+
+            - name: Decide what to put back
+              ansible.builtin.include_tasks: deploy-tasks/rescue-pins.yml
+
+            - name: Put the pins back
+              ansible.builtin.include_tasks: deploy-tasks/write-pins.yml
+              vars:
+                pins: "{{ restore_pins }}"
+
+            - name: Restart the previous version
+              when: restart_previous | bool
+              ansible.builtin.command:
+                cmd: docker compose up -d --no-deps {{ services | join(' ') }}
+                chdir: "{{ app_dir }}"
+              environment: "{{ docker_env }}"
+              changed_when: true
+              failed_when: false
+
+            - name: Wait for the previous version
+              when: restart_previous | bool
+              ansible.builtin.include_tasks: deploy-tasks/wait-healthy.yml
+              vars:
+                wait_services: "{{ services }}"
+
+            - name: Fail the deploy
+              ansible.builtin.fail:
+                msg: >-
+                  {% if restarted | bool %}{{ services | join(', ') }} at {{ version | default('latest', true) }}
+                  did not become healthy (logs above); rolled back to {{ restore_pins }}.
+                  {% else %}Deploy of {{ services | join(', ') }} at {{ version | default('latest', true) }} failed
+                  before anything was restarted (see the failed task above: {{ ansible_failed_task.name }});
+                  the running services were not touched.{% endif %}
+
+          always:
+            - name: Drop the throwaway registry config
+              when: version | length > 0
+              ansible.builtin.file:
+                path: "{{ docker_config_dir.path }}"
+                state: absent
+
+      always:
+        - name: Release the lock
+          ansible.builtin.include_tasks: deploy-tasks/unlock.yml
 
     - name: Remove dangling images
       ansible.builtin.command:

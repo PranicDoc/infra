@@ -1,0 +1,11 @@
+# managed by infra ansible deploy.yml — do not edit. Pins each service to the exact image the
+# last deploy shipped; source of truth: deployed-versions.yml next to this file.
+{% if pinned_images %}
+services:
+{% for service, image in pinned_images | dictsort %}
+  {{ service }}:
+    image: {{ image }}
+{% endfor %}
+{% else %}
+services: {}
+{% endif %}

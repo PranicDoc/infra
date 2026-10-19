@@ -1,0 +1,22 @@
+---
+# One deploy at a time on the VM (deploys from different repos would otherwise race on the pins).
+# mkdir is atomic: whoever creates the directory holds the lock. Released by unlock.yml.
+# Inputs: lock_path, lock_retries (default 60 x 5 s)
+- name: Take the deploy lock
+  ansible.builtin.command:
+    cmd: mkdir {{ lock_path }}
+  register: lock_taken
+  until: lock_taken.rc == 0
+  retries: "{{ lock_retries | default(60) }}"
+  delay: 5
+  changed_when: true
+  failed_when: false
+
+- name: Lock must be ours
+  ansible.builtin.assert:
+    that:
+      - lock_taken.rc == 0
+    fail_msg: >-
+      Another deploy holds {{ lock_path }}. If no deploy is running (a previous one was killed),
+      remove that directory on the VM and deploy again.
+    quiet: true

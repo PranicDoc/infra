@@ -13,3 +13,10 @@ compose_managed: false
 # Weekly cleanup of unused images (each deploy leaves the previous one behind).
 image_prune_weekday: "0" # Sunday
 image_prune_hour: "3"
+
+# Image repository of each compose service deploy.yml may ship; it pins <repo>:<version>.
+service_images:
+  cph: ghcr.io/pranicdoc/cph
+  ui: ghcr.io/pranicdoc/cph-ui
+  pdfworker: ghcr.io/pranicdoc/pdfworker
+  creditservice: ghcr.io/pranicdoc/creditservice

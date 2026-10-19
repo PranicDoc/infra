@@ -6,6 +6,9 @@ name: Build image (reusable)
 # Tags: sha-<short sha> always; `latest` too on the default branch (unless tag_latest: false).
 # Pull requests build but don't push.
 #
+# Deploy builds (image_tag set, e.g. v1.4.0 or sha-abc1234): push ONLY that tag, never `latest`,
+# and skip the build entirely when that tag already exists in GHCR (re-deploys reuse the image).
+#
 # Caller example:
 #
 #   build:
@@ -64,6 +67,10 @@ on:
         description: GitHub Environment whose Artifact Registry also receives the image (blank = GHCR only)
         type: string
         default: ""
+      image_tag:
+        description: Deploy build — push only this tag (e.g. v1.4.0), skip if it already exists (blank = sha-<short> + latest)
+        type: string
+        default: ""
     secrets:
       GPR_KEY:
         required: false
@@ -98,7 +105,9 @@ jobs:
         id: name
         run: |
           echo "ghcr=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ inputs.image_name }}" >> "$GITHUB_OUTPUT"
-          echo "tag=sha-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag=${IMAGE_TAG:-sha-$(git rev-parse --short=7 HEAD)}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -108,13 +117,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Deploy builds are idempotent: the same version is never rebuilt (or overwritten).
+      - name: Already built?
+        id: exists
+        env:
+          IMAGE: ${{ steps.name.outputs.ghcr }}:${{ steps.name.outputs.tag }}
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ] && docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "$IMAGE already exists, skipping build"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Tags
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.name.outputs.ghcr }}
           tags: |
-            type=raw,value=latest,enable=${{ inputs.tag_latest && inputs.ref == '' && github.ref_name == github.event.repository.default_branch }}
+            type=raw,value=latest,enable=${{ inputs.image_tag == '' && inputs.tag_latest && inputs.ref == '' && github.ref_name == github.event.repository.default_branch }}
             type=raw,value=${{ steps.name.outputs.tag }}
 
       - name: Build args
@@ -136,6 +158,7 @@ jobs:
 
       - name: Build and push
         id: build
+        if: steps.exists.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
@@ -155,7 +178,9 @@ jobs:
           echo "image=${{ steps.name.outputs.ghcr }}:$TAG" >> "$GITHUB_OUTPUT"
           {
             echo "### ${{ inputs.image_name }}"
-            echo "- \`${{ steps.name.outputs.ghcr }}:$TAG\` ($([ "$PUSH" = true ] && echo pushed || echo 'built, not pushed'))"
+            if [ "${{ steps.exists.outputs.exists }}" = true ]; then state="already existed, build skipped"
+            elif [ "$PUSH" = true ]; then state=pushed; else state="built, not pushed"; fi
+            echo "- \`${{ steps.name.outputs.ghcr }}:$TAG\` ($state)"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Same image, copied registry-to-registry: what runs on Cloud Run is byte-identical to GHCR's.
