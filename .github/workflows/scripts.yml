@@ -3,9 +3,9 @@ name: Script tests
 on:
   push:
     branches: [main]
-    paths: ["scripts/**", ".github/actions/**", ".github/workflows/scripts.yml", ".github/workflows/resolve-release.yml"]
+    paths: ["scripts/**", ".github/actions/**", ".github/workflows/scripts.yml", ".github/workflows/resolve-release.yml", ".github/workflows/deploy-vm.yml", ".github/workflows/deploy-cloudrun.yml"]
   pull_request:
-    paths: ["scripts/**", ".github/actions/**", ".github/workflows/scripts.yml", ".github/workflows/resolve-release.yml"]
+    paths: ["scripts/**", ".github/actions/**", ".github/workflows/scripts.yml", ".github/workflows/resolve-release.yml", ".github/workflows/deploy-vm.yml", ".github/workflows/deploy-cloudrun.yml"]
   workflow_dispatch:
 
 permissions:
@@ -19,3 +19,4 @@ jobs:
       - run: bash scripts/release/test-next-version.sh
       - run: pip install pyyaml
       - run: bash scripts/release/test-resolve-validate.sh
+      - run: bash scripts/release/test-deploy-env.sh

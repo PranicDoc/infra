@@ -1,9 +1,13 @@
 ---
 # Pins after this deploy: every existing pin, with the deployed services moved to <repo>:<version>.
+# No version (legacy callers: old build-and-push, rollback-cph, deploy-branch) unpins those services,
+# so compose runs the compose file's image (:latest) as before pinning existed.
 # Inputs: deployed_versions, services, service_images, version
 # Output: new_pins
 - name: New pins
   ansible.builtin.set_fact:
     new_pins: >-
-      {{ deployed_versions | combine(dict(services | zip(services | map('extract', service_images)
-                                          | map('regex_replace', '$', ':' ~ version)))) }}
+      {{ (deployed_versions | dict2items | rejectattr('key', 'in', services) | items2dict)
+         if version | length == 0 else
+         deployed_versions | combine(dict(services | zip(services | map('extract', service_images)
+                                     | map('regex_replace', '$', ':' ~ version)))) }}

@@ -104,6 +104,85 @@
       vars:
         override_path: "{{ scratch.path }}/accumulate.yml"
 
+    # ── legacy deploy (no version): unpins those services (review #2) ──
+    - name: Legacy deploy of cph without a version
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/new-pins.yml
+      vars:
+        deployed_versions: {cph: "ghcr.io/pranicdoc/cph:v1.0.0", ui: "ghcr.io/pranicdoc/cph-ui:v1.0.0"}
+        services: [cph]
+        version: ""
+        service_images: {cph: ghcr.io/pranicdoc/cph, ui: ghcr.io/pranicdoc/cph-ui}
+
+    - name: "Legacy deploy: cph unpinned (back to compose's :latest), ui untouched"
+      ansible.builtin.assert:
+        that:
+          - "'cph' not in new_pins"
+          - new_pins.ui == 'ghcr.io/pranicdoc/cph-ui:v1.0.0'
+
+    # ── rescue: only roll back what was restarted (review #4) ──────────
+    - name: Rescue before any restart (login or pull failed)
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/rescue-pins.yml
+      vars:
+        restarted: false
+        deployed_versions: {ui: "ghcr.io/pranicdoc/cph-ui:v1.0.0"}
+        rollback_versions: {ui: "ghcr.io/pranicdoc/cph-ui:v1.0.0", cph: "ghcr.io/pranicdoc/cph@sha256:abc123"}
+
+    - name: "Nothing restarted: pins go back exactly as they were, no restart"
+      ansible.builtin.assert:
+        that:
+          - "restore_pins == {'ui': 'ghcr.io/pranicdoc/cph-ui:v1.0.0'}"
+          - not restart_previous
+
+    - name: Rescue after the restart
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/rescue-pins.yml
+      vars:
+        restarted: true
+        deployed_versions: {ui: "ghcr.io/pranicdoc/cph-ui:v1.0.0"}
+        rollback_versions: {ui: "ghcr.io/pranicdoc/cph-ui:v1.0.0", cph: "ghcr.io/pranicdoc/cph@sha256:abc123"}
+
+    - name: "Restarted: roll back to the previous images and restart them"
+      ansible.builtin.assert:
+        that:
+          - restore_pins.cph == 'ghcr.io/pranicdoc/cph@sha256:abc123'
+          - restart_previous
+
+    # ── one deploy at a time on the VM (review #6) ─────────────────────
+    - name: Take the deploy lock
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/lock.yml
+      vars:
+        lock_path: "{{ scratch.path }}/.deploy.lock"
+
+    - name: A second deploy can't take it
+      block:
+        - name: Try the lock again (no waiting)
+          ansible.builtin.include_tasks: ../playbooks/deploy-tasks/lock.yml
+          vars:
+            lock_path: "{{ scratch.path }}/.deploy.lock"
+            lock_retries: 0
+        - name: Should not get here
+          ansible.builtin.set_fact:
+            second_locked: true
+      rescue:
+        - name: Remember it was refused
+          ansible.builtin.set_fact:
+            second_locked: false
+
+    - name: "Lock: second deploy refused while the first holds it"
+      ansible.builtin.assert:
+        that:
+          - not second_locked
+
+    - name: Release the lock
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/unlock.yml
+      vars:
+        lock_path: "{{ scratch.path }}/.deploy.lock"
+
+    - name: Take it again after release
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/lock.yml
+      vars:
+        lock_path: "{{ scratch.path }}/.deploy.lock"
+        lock_retries: 0
+
     - name: Clean up
       ansible.builtin.file:
         path: "{{ scratch.path }}"
