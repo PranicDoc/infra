@@ -1,0 +1,45 @@
+name: CI — Node (reusable)
+
+# Install, lint, test and build a Node frontend. Every app repo's `CI` workflow calls this for its
+# UI, so all frontends follow one contract: `npm ci`, then the package's `lint` and `test` scripts
+# when they exist, then `npm run build`. Pushes nothing.
+#
+#   ui:
+#     uses: PranicDoc/infra/.github/workflows/ci-node.yml@main
+#     with:
+#       working_directory: ui
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Directory containing package.json
+        type: string
+        required: true
+      node_version:
+        description: Node.js version
+        type: string
+        default: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm test --if-present
+      - run: npm run build

@@ -1,0 +1,82 @@
+name: CI — Gradle (reusable)
+
+# Compile + run the test suite of a Gradle project. Every app repo's `CI` workflow calls this,
+# so all services are tested the same way. Pushes nothing (images are built at deploy time).
+#
+#   backend:
+#     uses: PranicDoc/infra/.github/workflows/ci-gradle.yml@main
+#     with:
+#       working_directory: app        # where gradlew lives
+#       java_version: "17"
+#       use_gpr_key: true             # needs GitHub Packages (common-dtos, storage-sdk)
+#     secrets: inherit                # GPR_KEY
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: Directory containing gradlew
+        type: string
+        default: "."
+      java_version:
+        description: JDK version (Temurin)
+        type: string
+        default: "17"
+      use_gpr_key:
+        description: Pass -Pgpr.user / -Pgpr.key (secrets.GPR_KEY) for GitHub Packages dependencies
+        type: boolean
+        default: false
+    secrets:
+      GPR_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test
+        env:
+          GPR_KEY: ${{ secrets.GPR_KEY }}
+          GPR_USER: ${{ github.actor }}
+        run: |
+          chmod +x gradlew
+          args=(test --no-daemon --continue)
+          if [ "${{ inputs.use_gpr_key }}" = "true" ]; then
+            [ -n "$GPR_KEY" ] || { echo "::error::use_gpr_key is set but secrets.GPR_KEY is empty (pass secrets: inherit)"; exit 1; }
+            args+=("-Pgpr.user=$GPR_USER" "-Pgpr.key=$GPR_KEY")
+          fi
+          ./gradlew "${args[@]}"
+
+      - name: Test summary
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=(build/test-results/test/*.xml)
+          [ ${#files[@]} -gt 0 ] || { echo "No test results found" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          tests=$(cat "${files[@]}" | grep -c '<testcase ' || true)
+          failed=$(cat "${files[@]}" | grep -c '<failure' || true)
+          skipped=$(cat "${files[@]}" | grep -c '<skipped' || true)
+          echo "**${{ inputs.working_directory }}**: $tests tests, $failed failed, $skipped skipped" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.run_id }}-${{ strategy.job-index }}
+          path: ${{ inputs.working_directory }}/build/reports/tests/test
+          retention-days: 7
