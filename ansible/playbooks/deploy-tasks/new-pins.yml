@@ -1,0 +1,9 @@
+---
+# Pins after this deploy: every existing pin, with the deployed services moved to <repo>:<version>.
+# Inputs: deployed_versions, services, service_images, version
+# Output: new_pins
+- name: New pins
+  ansible.builtin.set_fact:
+    new_pins: >-
+      {{ deployed_versions | combine(dict(services | zip(services | map('extract', service_images)
+                                          | map('regex_replace', '$', ':' ~ version)))) }}

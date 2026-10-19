@@ -1,0 +1,23 @@
+---
+# Refuse to overwrite a docker-compose.override.yml that deploy.yml didn't write.
+# Input: override_path
+- name: Look for an existing override
+  ansible.builtin.stat:
+    path: "{{ override_path }}"
+  register: override_stat
+
+- name: Read the existing override
+  when: override_stat.stat.exists
+  ansible.builtin.slurp:
+    src: "{{ override_path }}"
+  register: override_file
+
+- name: Existing override must be ours
+  when: override_stat.stat.exists
+  ansible.builtin.assert:
+    that:
+      - (override_file.content | b64decode).splitlines() | first | default('') is search('^# managed by infra ansible deploy.yml')
+    fail_msg: >-
+      {{ override_path }} exists but was not written by deploy.yml (no marker line).
+      Move its settings into docker-compose.yml or delete it, then deploy again.
+    quiet: true

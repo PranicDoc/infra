@@ -1,0 +1,110 @@
+---
+# Localhost tests for the version-pinning pieces of playbooks/deploy.yml (no VM, no Docker):
+#   ansible-playbook tests/deploy-override.yml      (from ansible/)
+- name: Deploy version pinning
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    marker: "# managed by infra ansible deploy.yml"
+  tasks:
+    - name: Scratch dir
+      ansible.builtin.tempfile:
+        state: directory
+      register: scratch
+
+    # ── pins accumulate ────────────────────────────────────────────────
+    - name: Deploy ui v1.0.0 on top of a pinned cph
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/new-pins.yml
+      vars:
+        deployed_versions: {cph: "ghcr.io/pranicdoc/cph:v1.0.0"}
+        services: [ui]
+        version: v1.0.0
+        service_images: {cph: ghcr.io/pranicdoc/cph, ui: ghcr.io/pranicdoc/cph-ui}
+
+    - name: Render override from the new pins
+      ansible.builtin.template:
+        src: ../roles/app/templates/docker-compose.override.yml.j2
+        dest: "{{ scratch.path }}/accumulate.yml"
+        mode: "0644"
+      vars:
+        pinned_images: "{{ new_pins }}"
+
+    - name: Read rendered override
+      ansible.builtin.slurp:
+        src: "{{ scratch.path }}/accumulate.yml"
+      register: accumulate
+
+    - name: "Pins accumulate: both services keep their image, marker first"
+      vars:
+        text: "{{ accumulate.content | b64decode }}"
+        parsed: "{{ text | from_yaml }}"
+      ansible.builtin.assert:
+        that:
+          - text.splitlines()[0].startswith(marker)
+          - parsed.services.cph.image == 'ghcr.io/pranicdoc/cph:v1.0.0'
+          - parsed.services.ui.image == 'ghcr.io/pranicdoc/cph-ui:v1.0.0'
+
+    # ── rollback without previous pin ──────────────────────────────────
+    - name: Rollback refs with no pins yet
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/rollback-refs.yml
+      vars:
+        services: [cph]
+        deployed_versions: {}
+        running_digests: {cph: "ghcr.io/pranicdoc/cph@sha256:abc123"}
+
+    - name: "Rollback without previous pin: falls back to the running digest"
+      ansible.builtin.assert:
+        that:
+          - rollback_versions.cph == 'ghcr.io/pranicdoc/cph@sha256:abc123'
+
+    - name: Rollback refs with an existing pin
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/rollback-refs.yml
+      vars:
+        services: [cph]
+        deployed_versions: {cph: "ghcr.io/pranicdoc/cph:v1.0.0", ui: "ghcr.io/pranicdoc/cph-ui:v1.0.0"}
+        running_digests: {cph: "ghcr.io/pranicdoc/cph@sha256:abc123"}
+
+    - name: "Rollback with a pin: previous pin wins, other pins kept"
+      ansible.builtin.assert:
+        that:
+          - rollback_versions.cph == 'ghcr.io/pranicdoc/cph:v1.0.0'
+          - rollback_versions.ui == 'ghcr.io/pranicdoc/cph-ui:v1.0.0'
+
+    # ── foreign override refused ───────────────────────────────────────
+    - name: Write an override we did not create
+      ansible.builtin.copy:
+        dest: "{{ scratch.path }}/docker-compose.override.yml"
+        content: "services:\n  cph:\n    environment: [FOO=bar]\n"
+        mode: "0644"
+
+    - name: Check a foreign override
+      block:
+        - name: Run the override check
+          ansible.builtin.include_tasks: ../playbooks/deploy-tasks/check-override.yml
+          vars:
+            override_path: "{{ scratch.path }}/docker-compose.override.yml"
+        - name: Should not get here
+          ansible.builtin.set_fact:
+            foreign_refused: false
+      rescue:
+        - name: Remember the refusal
+          ansible.builtin.set_fact:
+            foreign_refused: true
+            foreign_msg: "{{ ansible_failed_result.msg }}"
+
+    - name: "Foreign override refused, naming the file"
+      ansible.builtin.assert:
+        that:
+          - foreign_refused
+          - "'docker-compose.override.yml' in foreign_msg"
+
+    - name: Our own override passes the check
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/check-override.yml
+      vars:
+        override_path: "{{ scratch.path }}/accumulate.yml"
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ scratch.path }}"
+        state: absent

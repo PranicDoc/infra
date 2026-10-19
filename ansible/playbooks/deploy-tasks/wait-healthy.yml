@@ -1,0 +1,26 @@
+---
+# Wait until each service's container is healthy ("none" = no healthcheck; running is enough).
+# Input: wait_services
+- name: Container ids
+  ansible.builtin.command:
+    cmd: docker compose ps -q {{ item }}
+    chdir: "{{ app_dir }}"
+  loop: "{{ wait_services }}"
+  register: containers
+  changed_when: false
+  failed_when: containers.stdout | length == 0
+
+- name: Wait until healthy
+  ansible.builtin.command:
+    cmd: >-
+      docker inspect -f
+      '{% raw %}{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}{% endraw %}'
+      {{ item.stdout }}
+  loop: "{{ containers.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: health
+  until: health.stdout in ['healthy', 'none']
+  retries: "{{ health_retries }}"
+  delay: 10
+  changed_when: false

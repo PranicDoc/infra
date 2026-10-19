@@ -47,6 +47,7 @@ on:
 
 jobs:
   approval:
+    if: inputs.environment == 'prod'
     permissions:
       issues: write
     uses: PranicDoc/infra/.github/workflows/approval.yml@main
@@ -57,6 +58,8 @@ jobs:
       approvers: ${{ inputs.approvers }}
   deploy:
     needs: approval
+    # Approval only for prod; run when it was skipped, never after a denied/failed approval.
+    if: always() && (needs.approval.result == 'success' || needs.approval.result == 'skipped')
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     permissions:
@@ -68,6 +71,19 @@ jobs:
       PROJECT: ${{ vars.GCP_PROJECT_ID }}
       IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_ARTIFACT_REPO || 'all-in-one' }}/${{ inputs.image_name || inputs.service }}:${{ inputs.image_tag }}
     steps:
+      - name: Cloud Run is set up for this service
+        env:
+          WIF: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          case "$SERVICE" in
+            cph|creditservice) ;;
+            *) echo "::error::$SERVICE has no Cloud Run service (only cph and creditservice run on Cloud Run)"; exit 1 ;;
+          esac
+          if [ -z "$WIF" ]; then
+            echo "::error::Cloud Run is not set up yet (run bootstrap-gcp.sh): GCP_WORKLOAD_IDENTITY_PROVIDER is empty in environment '${{ inputs.environment }}'"
+            exit 1
+          fi
+
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}

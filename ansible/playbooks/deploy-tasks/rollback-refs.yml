@@ -1,0 +1,10 @@
+---
+# What to go back to if the deploy fails: the current pins, plus — for a service being deployed
+# that has no pin yet (first versioned deploy) — the exact image its container runs now.
+# Inputs: services, deployed_versions (service -> image), running_digests (service -> repo digest)
+# Output: rollback_versions
+- name: Rollback versions
+  vars:
+    unpinned: "{{ services | reject('in', deployed_versions) | select('in', running_digests) | list }}"
+  ansible.builtin.set_fact:
+    rollback_versions: "{{ deployed_versions | combine(dict(unpinned | zip(unpinned | map('extract', running_digests)))) }}"

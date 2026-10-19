@@ -1,16 +1,18 @@
 name: Deploy to prod VM (reusable)
 
-# Approval, then Ansible: ansible/playbooks/deploy.yml pulls the services' current images, restarts
-# only those services and waits for their healthchecks (prints logs and fails if one stays
-# unhealthy). Nothing happens until an approver comments "approve" on the issue approval.yml opens.
+# Approval (prod), then Ansible: ansible/playbooks/deploy.yml pins the services to
+# <image>:<version> (docker-compose.override.yml), pulls, restarts only those services and waits for
+# their healthchecks. If one stays unhealthy it puts back the previous images and still fails.
+# The VM logs in to GHCR with this run's token for the pull and logs out afterwards.
 #
 #   deploy:
-#     needs: build
-#     permissions: { contents: read, issues: write }   # issues: approval gate
+#     needs: [resolve, build]
+#     permissions: { contents: read, issues: write, packages: read }
 #     uses: PranicDoc/infra/.github/workflows/deploy-vm.yml@main
 #     with:
-#       services: cph
-#       image_tag: ${{ needs.build.outputs.image_tag }}   # shown on the approval issue
+#       services: cph ui
+#       version: ${{ needs.resolve.outputs.version }}   # v1.4.0 or sha-abc1234
+#       environment: prod
 #     secrets: inherit   # VM_HOST, VM_USER, and VM_SSH_KEY or VM_PASSWORD
 
 on:
@@ -20,10 +22,18 @@ on:
         description: Space-separated docker compose service names, e.g. "cph ui"
         type: string
         required: true
+      version:
+        description: Image tag to deploy and pin, e.g. v1.4.0 or sha-abc1234
+        type: string
+        default: ""
       image_tag:
-        description: What is being deployed (informational, shown on the approval issue)
+        description: Deprecated alias of version (old build-and-push callers); used when version is empty
         type: string
         default: latest
+      environment:
+        description: prod or uat — shown on the approval issue and summary; prod requires approval
+        type: string
+        default: prod
       approvers:
         description: GitHub users (comma-separated) allowed to approve
         type: string
@@ -40,25 +50,37 @@ on:
 
 jobs:
   approval:
+    if: inputs.environment == 'prod'
     permissions:
       issues: write
     uses: PranicDoc/infra/.github/workflows/approval.yml@main
     with:
-      title: "Deploy ${{ inputs.services }} (${{ inputs.image_tag }}) to the prod VM"
+      title: "Deploy ${{ inputs.services }} ${{ inputs.version || inputs.image_tag }} to the VM (${{ inputs.environment }})"
       details: |
-        **Services:** `${{ inputs.services }}` · **image:** `${{ inputs.image_tag }}` · **target:** prod VM
+        **Services:** `${{ inputs.services }}` · **version:** `${{ inputs.version || inputs.image_tag }}` · **target:** VM · **environment:** ${{ inputs.environment }}
       approvers: ${{ inputs.approvers }}
 
   deploy:
     needs: approval
+    # Approval is skipped outside prod; run then, but never after a denied/failed approval.
+    if: always() && (needs.approval.result == 'success' || needs.approval.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read   # the VM pulls with this run's GITHUB_TOKEN
     steps:
-      - name: Services as JSON
+      - name: Extra vars
         id: vars
         env:
           SERVICES: ${{ inputs.services }}
+          VERSION: ${{ inputs.version || inputs.image_tag }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "json=$(jq -cn --arg s "$SERVICES" '{services: ($s | split(" ") | map(select(. != "")))}')" >> "$GITHUB_OUTPUT"
+          json=$(jq -cn --arg s "$SERVICES" --arg v "$VERSION" --arg u "$REGISTRY_USER" --arg t "$REGISTRY_TOKEN" \
+            '{services: ($s | split(" ") | map(select(. != ""))), version: $v, registry_user: $u, registry_token: $t}')
+          echo "::add-mask::$REGISTRY_TOKEN"
+          echo "json=$json" >> "$GITHUB_OUTPUT"
 
       - uses: PranicDoc/infra/.github/actions/ansible-vm@main
         with:
@@ -71,4 +93,4 @@ jobs:
 
       - name: Summary
         if: success()
-        run: echo "Deployed \`${{ inputs.services }}\` (${{ inputs.image_tag }}) to the prod VM" >> "$GITHUB_STEP_SUMMARY"
+        run: echo "Deployed \`${{ inputs.services }}\` at \`${{ inputs.version || inputs.image_tag }}\` to the VM (${{ inputs.environment }})" >> "$GITHUB_STEP_SUMMARY"
