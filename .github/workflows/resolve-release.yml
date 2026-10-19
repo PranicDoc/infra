@@ -1,0 +1,90 @@
+name: Resolve release (reusable)
+
+# First job of every Deploy: validates the inputs, resolves what to deploy, and refuses commits
+# whose CI didn't pass. Nothing is built or deployed if this fails.
+#
+#   tag:          vX.Y.Z, or empty = the default branch's HEAD (branch deploys are not supported)
+#   target:       vm | cloudrun        — decides where it goes
+#   environment:  prod | uat           — recorded for now; must match the target (vm+prod, cloudrun+uat)
+#
+# Outputs: sha (commit), version (the tag, or sha-<7> for an untagged HEAD = the image tag), ref.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        default: ""
+      target:
+        type: string
+        required: true
+      environment:
+        type: string
+        required: true
+    outputs:
+      sha:
+        value: ${{ jobs.resolve.outputs.sha }}
+      version:
+        value: ${{ jobs.resolve.outputs.version }}
+      ref:
+        value: ${{ jobs.resolve.outputs.ref }}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - name: Validate inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          TARGET: ${{ inputs.target }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [ -n "$TAG" ] && ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must be vX.Y.Z (a release), or empty for the latest commit on the default branch; got '$TAG'"
+            exit 1
+          fi
+          case "$TARGET:$ENVIRONMENT" in
+            vm:prod|cloudrun:uat) ;;
+            vm:*)       echo "::error::vm requires prod (the VM is prod); got environment '$ENVIRONMENT'"; exit 1 ;;
+            cloudrun:*) echo "::error::cloudrun requires uat (Cloud Run is UAT); got environment '$ENVIRONMENT'"; exit 1 ;;
+            *)          echo "::error::target must be vm or cloudrun; got '$TARGET'"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Resolve commit and version
+        id: resolve
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$TAG" ]; then
+            sha=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}") \
+              || { echo "::error::tag $TAG does not exist. Run Release first."; exit 1; }
+            version="$TAG"; ref="$TAG"
+          else
+            sha=$(git rev-parse HEAD)
+            version="sha-${sha:0:7}"; ref="$sha"
+          fi
+          { echo "sha=$sha"; echo "version=$version"; echo "ref=$ref"; } >> "$GITHUB_OUTPUT"
+
+      - uses: PranicDoc/infra/.github/actions/require-ci@main
+        with:
+          sha: ${{ steps.resolve.outputs.sha }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deploy ${{ steps.resolve.outputs.version }}"
+            echo "- commit \`${{ steps.resolve.outputs.sha }}\`"
+            echo "- target **${{ inputs.target }}**, environment **${{ inputs.environment }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
