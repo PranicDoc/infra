@@ -1,0 +1,29 @@
+name: Require green CI
+description: Fails unless the caller repo's CI workflow succeeded for this exact commit
+
+inputs:
+  sha:
+    description: Commit SHA that must have a successful CI run
+    required: true
+  workflow:
+    description: CI workflow file in the caller repo
+    required: false
+    default: ci.yml
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}   # caller job needs actions: read
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.sha }}
+        WORKFLOW: ${{ inputs.workflow }}
+      run: |
+        runs=$(gh run list -R "$REPO" --workflow "$WORKFLOW" --commit "$SHA" --status success \
+                 --limit 1 --json databaseId --jq 'length')
+        if [ "$runs" != "1" ]; then
+          echo "::error::$WORKFLOW has no successful run for ${SHA:0:7} in $REPO. Wait for CI (or fix it) and try again."
+          exit 1
+        fi
+        echo "CI passed for ${SHA:0:7}"

@@ -17,3 +17,6 @@ ansible/roles/app/files/.env
 
 # Local infra progress notes (not shared)
 PROGRESS.md
+
+# superpowers plan workspaces (local scratch)
+.superpowers/

@@ -1,0 +1,19 @@
+name: Script tests
+
+on:
+  push:
+    branches: [main]
+    paths: ["scripts/**", ".github/actions/**", ".github/workflows/scripts.yml"]
+  pull_request:
+    paths: ["scripts/**", ".github/actions/**", ".github/workflows/scripts.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/release/test-next-version.sh

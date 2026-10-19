@@ -1,0 +1,80 @@
+name: Release (reusable)
+
+# Cut a release of the caller repo: tag the default branch's HEAD with the next SemVer version
+# and publish a GitHub Release with generated notes. Refuses a commit whose CI didn't pass, and a
+# HEAD that is already released. Deploy then builds and ships that tag.
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         bump: { type: choice, options: [patch, minor, major], default: patch }
+#   jobs:
+#     release:
+#       permissions: { contents: write, actions: read }
+#       uses: PranicDoc/infra/.github/workflows/release.yml@main
+#       with:
+#         bump: ${{ inputs.bump }}
+
+on:
+  workflow_call:
+    inputs:
+      bump:
+        description: patch, minor or major
+        type: string
+        required: true
+    outputs:
+      version:
+        description: The tag that was created
+        value: ${{ jobs.release.outputs.version }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Commit to release
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: PranicDoc/infra/.github/actions/require-ci@main
+        with:
+          sha: ${{ steps.head.outputs.sha }}
+
+      - name: Latest release
+        id: latest
+        run: |
+          released=$(git tag --points-at HEAD --list 'v*' | head -1)
+          if [ -n "$released" ]; then
+            echo "::error::HEAD is already released as $released. Merge something new first."
+            exit 1
+          fi
+          echo "tag=$(git tag --list 'v*' --sort=-v:refname | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: PranicDoc/infra/.github/actions/next-version@main
+        id: next
+        with:
+          latest: ${{ steps.latest.outputs.tag }}
+          bump: ${{ inputs.bump }}
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+          SHA: ${{ steps.head.outputs.sha }}
+        run: gh release create "$VERSION" --target "$SHA" --title "$VERSION" --generate-notes
+
+      - name: Summary
+        run: |
+          {
+            echo "Released **${{ steps.next.outputs.version }}** at \`${{ steps.head.outputs.sha }}\`"
+            echo "(previous: ${{ steps.latest.outputs.tag || 'none' }}, bump: ${{ inputs.bump }})"
+          } >> "$GITHUB_STEP_SUMMARY"
