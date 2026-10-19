@@ -7,6 +7,7 @@
   gather_facts: false
   vars:
     marker: "# managed by infra ansible deploy.yml"
+    override_file: /opt/pranicdoc/docker-compose.override.yml # same play var as deploy.yml
   tasks:
     - name: Scratch dir
       ansible.builtin.tempfile:
@@ -103,6 +104,19 @@
       ansible.builtin.include_tasks: ../playbooks/deploy-tasks/check-override.yml
       vars:
         override_path: "{{ scratch.path }}/accumulate.yml"
+
+    # deploy.yml has a play var `override_file` (the override's path); the check must not
+    # clobber it (2026-10-19 prod run: a registered result overwrote it, and writing the pins failed).
+    - name: Check with the caller's override_file variable set
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/check-override.yml
+      vars:
+        override_path: "{{ scratch.path }}/accumulate.yml"
+
+    - name: "Check leaves the caller's override_file untouched"
+      ansible.builtin.assert:
+        that:
+          - override_file is string
+          - override_file == '/opt/pranicdoc/docker-compose.override.yml'
 
     # ── legacy deploy (no version): unpins those services (review #2) ──
     - name: Legacy deploy of cph without a version
