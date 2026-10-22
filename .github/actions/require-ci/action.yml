@@ -1,5 +1,5 @@
 name: Require green CI
-description: Fails unless the caller repo's CI workflow succeeded for this exact commit
+description: Passes once the caller repo CI workflow succeeded for this exact commit (waits for a running one); fails if it failed
 
 inputs:
   sha:
@@ -9,6 +9,10 @@ inputs:
     description: CI workflow file in the caller repo
     required: false
     default: ci.yml
+  wait_minutes:
+    description: How long to wait for a CI run that is queued, running or not yet started
+    required: false
+    default: "10"
 
 runs:
   using: composite
@@ -19,11 +23,30 @@ runs:
         REPO: ${{ github.repository }}
         SHA: ${{ inputs.sha }}
         WORKFLOW: ${{ inputs.workflow }}
+        WAIT_MINUTES: ${{ inputs.wait_minutes }}
       run: |
-        runs=$(gh run list -R "$REPO" --workflow "$WORKFLOW" --commit "$SHA" --status success \
-                 --limit 1 --json databaseId --jq 'length')
-        if [ "$runs" != "1" ]; then
-          echo "::error::$WORKFLOW has no successful run for ${SHA:0:7} in $REPO. Wait for CI (or fix it) and try again."
-          exit 1
-        fi
-        echo "CI passed for ${SHA:0:7}"
+        # Release often follows a merge by seconds: wait for CI that is still running (or not yet
+        # started) instead of failing, but fail at once if it finished unsuccessfully.
+        deadline=$((SECONDS + ${WAIT_MINUTES} * 60))
+        while true; do
+          rows=$(gh run list -R "$REPO" --workflow "$WORKFLOW" --commit "$SHA" --limit 20 \
+                   --json status,conclusion --jq '.[] | "\(.status) \(.conclusion)"')
+          if echo "$rows" | grep -q '^completed success$'; then
+            echo "CI passed for ${SHA:0:7}"
+            exit 0
+          fi
+          if echo "$rows" | grep -Eq '^(queued|in_progress|waiting|requested|pending) '; then
+            state="still running"
+          elif [ -n "$rows" ]; then
+            echo "::error::$WORKFLOW did not succeed for ${SHA:0:7} in $REPO (${rows//$'\n'/, }). Fix CI and try again."
+            exit 1
+          else
+            state="not started yet"
+          fi
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "::error::$WORKFLOW is $state for ${SHA:0:7} in $REPO after ${WAIT_MINUTES} min. Wait for CI and try again."
+            exit 1
+          fi
+          echo "$WORKFLOW $state for ${SHA:0:7}; checking again in 15 s"
+          sleep 15
+        done
