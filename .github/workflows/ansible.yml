@@ -41,9 +41,11 @@ jobs:
       - run: pip install ansible-core==2.17.* ansible-lint==24.*
       - run: ansible-galaxy collection install -r requirements.yml
       - run: ansible-playbook playbooks/provision.yml playbooks/deploy.yml playbooks/ping.yml --syntax-check
-      - run: ansible-lint playbooks/provision.yml playbooks/deploy.yml playbooks/ping.yml tests/deploy-override.yml
+      - run: ansible-lint playbooks/provision.yml playbooks/deploy.yml playbooks/ping.yml tests/deploy-override.yml tests/deploy-env.yml
       - name: Deploy pinning tests (localhost)
         run: ansible-playbook -i localhost, tests/deploy-override.yml
+      - name: Deploy env var tests (localhost)
+        run: ansible-playbook -i localhost, tests/deploy-env.yml
 
   approval:
     needs: lint

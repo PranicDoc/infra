@@ -1,0 +1,9 @@
+---
+# Put back the .env that write-env.yml saved, when this deploy changed it. Needs: env_file, env_backup.
+- name: Put the previous .env back
+  when: env_changed | default(false) | bool
+  ansible.builtin.copy:
+    src: "{{ env_backup }}"
+    dest: "{{ env_file }}"
+    remote_src: true
+    mode: preserve

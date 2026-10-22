@@ -1,0 +1,38 @@
+name: Deploy env vars
+description: >-
+  Parse "KEY=value;KEY2=value2" given at deploy time (see parse-env-vars.sh for the rules), mask every
+  value in the logs, and hand the result to the VM playbook (json) or gcloud (gcloud).
+
+inputs:
+  env_vars:
+    description: KEY=value pairs separated by ';'. Empty = no changes.
+    required: false
+    default: ""
+
+outputs:
+  json:
+    description: JSON object of the variables, e.g. {"A":"1"}; {} when none
+    value: ${{ steps.parse.outputs.json }}
+  gcloud:
+    description: Value for gcloud --update-env-vars (';' as the delimiter); empty when none
+    value: ${{ steps.parse.outputs.gcloud }}
+  keys:
+    description: Variable names, space-separated (safe to print); empty when none
+    value: ${{ steps.parse.outputs.keys }}
+
+runs:
+  using: composite
+  steps:
+    - id: parse
+      shell: bash
+      env:
+        ENV_VARS: ${{ inputs.env_vars }}
+      run: |
+        json=$(bash "$GITHUB_ACTION_PATH/parse-env-vars.sh" "$ENV_VARS") || { echo "::error::Invalid env_vars (see the message above). Use KEY=value pairs separated by ';'."; exit 1; }
+        # Values may be secrets: hide every non-empty one from the rest of the run's logs.
+        while IFS= read -r v; do [ -n "$v" ] && echo "::add-mask::$v"; done < <(jq -r '.[]' <<< "$json")
+        echo "json=$json" >> "$GITHUB_OUTPUT"
+        # gcloud's alternative delimiter syntax (^;^) lets values contain commas.
+        gcloud=$(jq -r 'to_entries | if length == 0 then "" else "^;^" + (map("\(.key)=\(.value)") | join(";")) end' <<< "$json")
+        echo "gcloud=$gcloud" >> "$GITHUB_OUTPUT"
+        echo "keys=$(jq -r 'keys | join(" ")' <<< "$json")" >> "$GITHUB_OUTPUT"

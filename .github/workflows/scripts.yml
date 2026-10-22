@@ -20,3 +20,4 @@ jobs:
       - run: pip install pyyaml
       - run: bash scripts/release/test-resolve-validate.sh
       - run: bash scripts/release/test-deploy-env.sh
+      - run: bash scripts/release/test-parse-env-vars.sh

@@ -1,0 +1,41 @@
+---
+# Set this deploy's env vars in the VM's .env as KEY='value', after keeping a copy so a rollback can
+# put the old file back (restore-env.yml). Needs: env_vars (dict), env_file, env_backup, app_dir.
+- name: Keep the current .env for a rollback
+  ansible.builtin.copy:
+    src: "{{ env_file }}"
+    dest: "{{ env_backup }}"
+    remote_src: true
+    mode: preserve
+
+# From here on a rollback restores the copy, even if setting a variable below fails halfway.
+- name: .env is being changed by this deploy
+  ansible.builtin.set_fact:
+    env_changed: true
+
+- name: Set the env vars in .env
+  ansible.builtin.lineinfile:
+    path: "{{ env_file }}"
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}='{{ item.value }}'"
+  loop: "{{ env_vars | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true # values may be secrets
+
+# A variable only reaches a container when the compose file passes it (environment: KEY: ${KEY}).
+- name: Compose files that use each variable
+  ansible.builtin.shell:
+    cmd: grep -qsE '\$\{?{{ item }}\b' docker-compose*.yml
+    chdir: "{{ app_dir }}"
+  loop: "{{ env_vars.keys() | list }}"
+  register: env_refs
+  changed_when: false
+  failed_when: false
+
+- name: Warn about variables no service reads
+  ansible.builtin.debug:
+    msg: >-
+      {{ item }} is set in .env but no docker-compose file uses it, so no container sees it yet.
+      Add it to the service's environment: in docker-compose.yml, e.g. {{ item ~ ': ${' ~ item ~ '}' }}.
+  loop: "{{ env_refs.results | rejectattr('rc', 'eq', 0) | map(attribute='item') | list }}"

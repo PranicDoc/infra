@@ -93,6 +93,16 @@ is reused, never rebuilt), then:
   if a killed run left it behind, remove that directory on the VM).
 - **Cloud Run:** swaps the image and rolls traffic back if the health check fails (needs the GCP bootstrap).
 
+**Env vars at deploy time:** the optional **env_vars** input takes `KEY=value` pairs separated by `;`
+(e.g. `LOG_LEVEL=info;FEATURE_X=true`; values can't contain `;`, `'` or line breaks). Values are masked in the
+logs, but the inputs show on the run page, so keep real secrets in the VM's `.env` / tofu instead.
+- **VM:** each pair is written to `/opt/pranicdoc/.env` as `KEY='value'` before the restart, and the previous
+  `.env` is put back if the deploy rolls back. A container only sees a variable its service passes in
+  `docker-compose.yml` (`KEY: ${KEY}`); the run warns about any it doesn't. Services not in this deploy
+  pick the change up on their next restart.
+- **Cloud Run:** added to the new revision (`--update-env-vars`). tofu owns the service's env, so a variable
+  that should stay must also go into tofu, or the next apply removes it.
+
 **Rollback** = run Deploy with an older tag. Not across a Flyway migration: older cph code refuses a newer
 schema, so a backend rollback only works between releases that didn't add a migration.
 

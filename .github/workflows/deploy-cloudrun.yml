@@ -1,9 +1,9 @@
 name: Deploy to Cloud Run (reusable)
 
 # Called from cph / pdfWorker / credit-service after their image is pushed to
-# Artifact Registry. Only swaps the image — env, secrets, scaling and IAM are
-# owned by tofu/. If the new revision fails its health check, traffic goes
-# straight back to the previous revision.
+# Artifact Registry. Swaps the image, plus any env_vars given for this deploy —
+# env, secrets, scaling and IAM are otherwise owned by tofu/. If the new revision
+# fails its health check, traffic goes straight back to the previous revision.
 #
 # Same call for every environment. The CALLER repo needs a GitHub Environment of
 # that name with variables GCP_PROJECT_ID, GCP_REGION, GCP_WORKLOAD_IDENTITY_PROVIDER,
@@ -44,6 +44,13 @@ on:
         description: GitHub users (comma-separated) who must approve before anything is deployed
         type: string
         default: user-lee-005
+      env_vars:
+        description: >-
+          Optional KEY=value pairs separated by ';', added to the new revision (gcloud --update-env-vars).
+          A failed health check sends traffic back to the previous revision, old env included. tofu/
+          owns the service's env, so add lasting variables there too or the next tofu apply removes them.
+        type: string
+        default: ""
 
 jobs:
   check:
@@ -113,10 +120,20 @@ jobs:
           echo "revision=$PREV" >> "$GITHUB_OUTPUT"
           echo "Previous revision: $PREV"
 
+      - name: Env vars to set
+        id: env
+        uses: PranicDoc/infra/.github/actions/env-vars@main
+        with:
+          env_vars: ${{ inputs.env_vars }}
+
       - name: Roll out new image
+        env:
+          UPDATE_ENV: ${{ steps.env.outputs.gcloud }}
         run: |
+          args=()
+          [ -z "$UPDATE_ENV" ] || args+=(--update-env-vars="$UPDATE_ENV")
           gcloud run deploy "$SERVICE" --project="$PROJECT" --region="$REGION" \
-            --image="$IMAGE" --quiet
+            --image="$IMAGE" "${args[@]}" --quiet
 
       - name: Health check
         id: health
@@ -141,4 +158,8 @@ jobs:
 
       - name: Summary
         if: success()
-        run: echo "Deployed \`$IMAGE\` to **$SERVICE** ($PROJECT)" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ENV_KEYS: ${{ steps.env.outputs.keys }}
+        run: |
+          echo "Deployed \`$IMAGE\` to **$SERVICE** ($PROJECT)" >> "$GITHUB_STEP_SUMMARY"
+          [ -z "$ENV_KEYS" ] || echo "Env vars set on the revision: \`$ENV_KEYS\`" >> "$GITHUB_STEP_SUMMARY"

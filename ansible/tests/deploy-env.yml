@@ -1,0 +1,66 @@
+---
+# Localhost tests for the env-var pieces of playbooks/deploy.yml (no VM, no Docker):
+#   ansible-playbook -i localhost, tests/deploy-env.yml      (from ansible/)
+- name: Deploy env vars
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Scratch dir
+      ansible.builtin.tempfile:
+        state: directory
+      register: scratch
+
+    - name: Scratch app dir with a .env and a compose file
+      ansible.builtin.copy:
+        dest: "{{ scratch.path }}/{{ item.name }}"
+        content: "{{ item.content }}"
+        mode: "0600"
+      loop:
+        - {name: .env, content: "DB_HOST=db\nLOG_LEVEL=warn\n"}
+        - {name: docker-compose.yml, content: "services:\n  cph:\n    environment:\n      LOG_LEVEL: ${LOG_LEVEL}\n"}
+
+    - name: Set LOG_LEVEL (existing) and NEW_FLAG (new)
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/write-env.yml
+      vars:
+        app_dir: "{{ scratch.path }}"
+        env_file: "{{ scratch.path }}/.env"
+        env_backup: "{{ scratch.path }}/.env.pre-deploy"
+        env_vars: {LOG_LEVEL: "info", NEW_FLAG: "a=b c"}
+
+    - name: Read .env after the deploy
+      ansible.builtin.slurp:
+        src: "{{ scratch.path }}/.env"
+      register: after
+
+    - name: Existing key replaced in place, new key appended, others untouched
+      ansible.builtin.assert:
+        that:
+          - (after.content | b64decode) == "DB_HOST=db\nLOG_LEVEL='info'\nNEW_FLAG='a=b c'\n"
+          - env_changed | bool
+
+    - name: Only NEW_FLAG is reported as unused by compose
+      ansible.builtin.assert:
+        that:
+          - (env_refs.results | rejectattr('rc', 'eq', 0) | map(attribute='item') | list) == ['NEW_FLAG']
+
+    - name: Roll back
+      ansible.builtin.include_tasks: ../playbooks/deploy-tasks/restore-env.yml
+      vars:
+        env_file: "{{ scratch.path }}/.env"
+        env_backup: "{{ scratch.path }}/.env.pre-deploy"
+
+    - name: Read .env after the rollback
+      ansible.builtin.slurp:
+        src: "{{ scratch.path }}/.env"
+      register: restored
+
+    - name: The original .env is back
+      ansible.builtin.assert:
+        that:
+          - (restored.content | b64decode) == "DB_HOST=db\nLOG_LEVEL=warn\n"
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: "{{ scratch.path }}"
+        state: absent
