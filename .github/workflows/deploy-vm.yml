@@ -15,6 +15,7 @@ name: Deploy to prod VM (reusable)
 #       services: cph ui
 #       version: ${{ needs.resolve.outputs.version }}   # v1.4.0 or sha-abc1234
 #       environment: prod
+#       env_vars: ""        # optional "KEY=value;KEY2=value2", written to the VM's .env before restart
 #     secrets: inherit   # VM_HOST, VM_USER, and VM_SSH_KEY or VM_PASSWORD
 
 on:
@@ -40,6 +41,13 @@ on:
         description: GitHub users (comma-separated) allowed to approve
         type: string
         default: user-lee-005
+      env_vars:
+        description: >-
+          Optional KEY=value pairs separated by ';' (e.g. "FEATURE_X=true;LOG_LEVEL=info"). Each is set
+          in the VM's .env before the services restart, and put back if the deploy rolls back. Values
+          are masked in the logs, but workflow_dispatch inputs are visible on the run page.
+        type: string
+        default: ""
     secrets:
       VM_HOST:
         required: true
@@ -83,9 +91,16 @@ jobs:
     if: always() && needs.check.result == 'success' && (needs.approval.result == 'success' || needs.approval.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
+      - name: Env vars to set
+        id: env
+        uses: PranicDoc/infra/.github/actions/env-vars@main
+        with:
+          env_vars: ${{ inputs.env_vars }}
+
       - name: Extra vars
         id: vars
         env:
+          ENV_JSON: ${{ steps.env.outputs.json }}
           SERVICES: ${{ inputs.services }}
           # Only a real version pins and logs in; image_tag-only (legacy) callers deploy unpinned
           # with the VM's saved login.
@@ -94,7 +109,8 @@ jobs:
           REGISTRY_TOKEN: ${{ inputs.version != '' && secrets.GITHUB_TOKEN || '' }}
         run: |
           json=$(jq -cn --arg s "$SERVICES" --arg v "$VERSION" --arg u "$REGISTRY_USER" --arg t "$REGISTRY_TOKEN" \
-            '{services: ($s | split(" ") | map(select(. != ""))), version: $v, registry_user: $u, registry_token: $t}')
+            --argjson e "${ENV_JSON:-"{}"}" \
+            '{services: ($s | split(" ") | map(select(. != ""))), version: $v, registry_user: $u, registry_token: $t, env_vars: $e}')
           [ -z "$REGISTRY_TOKEN" ] || echo "::add-mask::$REGISTRY_TOKEN"
           echo "json=$json" >> "$GITHUB_OUTPUT"
 
@@ -109,4 +125,8 @@ jobs:
 
       - name: Summary
         if: success()
-        run: echo "Deployed \`${{ inputs.services }}\` at \`${{ inputs.version || inputs.image_tag }}\` to the VM (${{ inputs.environment }})" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          ENV_KEYS: ${{ steps.env.outputs.keys }}
+        run: |
+          echo "Deployed \`${{ inputs.services }}\` at \`${{ inputs.version || inputs.image_tag }}\` to the VM (${{ inputs.environment }})" >> "$GITHUB_STEP_SUMMARY"
+          [ -z "$ENV_KEYS" ] || echo "Env vars set in .env: \`$ENV_KEYS\`" >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,10 @@
 #   ansible-playbook playbooks/deploy.yml \
 #     -e '{"services": ["cph", "ui"], "version": "v1.4.0", "registry_user": "...", "registry_token": "..."}'
 #
+# Optional env_vars ({"KEY": "value"}, from the Deploy workflow's "KEY=value;KEY2=value2" input) are
+# written to .env as KEY='value' before the restart; a rollback puts the previous .env back. Only
+# variables that a docker-compose file passes to a service reach its container (the run warns).
+#
 # Without a version (legacy callers until they move to Release/Deploy: old build-and-push,
 # rollback-cph, deploy-branch) the services are unpinned and pulled as before, using the VM's own
 # saved registry login.
@@ -27,6 +31,10 @@
     override_file: "{{ app_dir }}/docker-compose.override.yml"
     lock_path: "{{ app_dir }}/.deploy.lock"
     restarted: false
+    env_vars: {} # optional {"KEY": "value"}: set in .env before the restart, put back on rollback
+    env_file: "{{ app_dir }}/.env"
+    env_backup: "{{ app_dir }}/.env.pre-deploy"
+    env_changed: false
   tasks:
     - name: Services were given
       ansible.builtin.assert:
@@ -108,6 +116,10 @@
               no_log: true
               changed_when: false
 
+            - name: Set this deploy's env vars in .env
+              when: env_vars | length > 0
+              ansible.builtin.include_tasks: deploy-tasks/write-env.yml
+
             - name: Work out the new pins
               ansible.builtin.include_tasks: deploy-tasks/new-pins.yml
 
@@ -162,6 +174,9 @@
               vars:
                 pins: "{{ restore_pins }}"
 
+            - name: Put the .env back
+              ansible.builtin.include_tasks: deploy-tasks/restore-env.yml
+
             - name: Restart the previous version
               when: restart_previous | bool
               ansible.builtin.command:
@@ -187,6 +202,12 @@
                   the running services were not touched.{% endif %}
 
           always:
+            - name: Drop the .env copy kept for a rollback
+              when: env_vars | length > 0
+              ansible.builtin.file:
+                path: "{{ env_backup }}"
+                state: absent
+
             - name: Drop the throwaway registry config
               when: version | length > 0
               ansible.builtin.file:
