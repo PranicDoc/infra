@@ -2,7 +2,8 @@ name: Release (reusable)
 
 # Cut a release of the caller repo: tag the default branch's HEAD with the next SemVer version
 # and publish a GitHub Release with generated notes. Refuses a commit whose CI didn't pass, and a
-# HEAD that is already released. Deploy then builds and ships that tag.
+# HEAD that is already released unless allow_rerelease is set (e.g. to rebuild the same code with
+# new build settings under a new version). Deploy then builds and ships that tag.
 #
 #   on:
 #     workflow_dispatch:
@@ -14,6 +15,7 @@ name: Release (reusable)
 #       uses: PranicDoc/infra/.github/workflows/release.yml@main
 #       with:
 #         bump: ${{ inputs.bump }}
+#         allow_rerelease: false   # optional: tag an already-released HEAD again
 
 on:
   workflow_call:
@@ -22,6 +24,10 @@ on:
         description: patch, minor or major
         type: string
         required: true
+      allow_rerelease:
+        description: Tag HEAD with a new version even when it is already released
+        type: boolean
+        default: false
     outputs:
       version:
         description: The tag that was created
@@ -51,11 +57,16 @@ jobs:
 
       - name: Latest release
         id: latest
+        env:
+          ALLOW_RERELEASE: ${{ inputs.allow_rerelease }}
         run: |
           released=$(git tag --points-at HEAD --list 'v*' | head -1)
           if [ -n "$released" ]; then
-            echo "::error::HEAD is already released as $released. Merge something new first."
-            exit 1
+            if [ "$ALLOW_RERELEASE" != "true" ]; then
+              echo "::error::HEAD is already released as $released. Merge something new first, or run with allow_rerelease."
+              exit 1
+            fi
+            echo "::warning::HEAD is already released as $released; tagging it again (allow_rerelease)."
           fi
           echo "tag=$(git tag --list 'v*' --sort=-v:refname | head -1)" >> "$GITHUB_OUTPUT"
 
